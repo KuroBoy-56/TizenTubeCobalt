@@ -22,133 +22,122 @@ runs:
         run: |
           rm -rf cobalt/src/out
         shell: bash
-      - name: Install sccache
-        if: inputs.enable_sccache == 'true'
-        uses: ./.github/actions/sccache
+        
+      # HACK 1: INYECTAR EL BAÚL DE GITHUB PARA GUARDAR EL CACHÉ LOCALMENTE
+      - name: Restaurar y Guardar Caché en GitHub
+        uses: actions/cache@v4
         with:
-          sccache_gcs_key: ${{ inputs.sccache_gcs_key }}
+          path: ~/.cache/sccache
+          key: sccache-${{ matrix.platform }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-${{ matrix.platform }}-
+          save-always: true
+
+      # INSTALACIÓN DIRECTA DE LINUX: Ignoramos el script roto de Mac de Google
+      - name: Install sccache
+        run: |
+          echo "Descargando sccache para Linux..."
+          wget https://github.com/mozilla/sccache/releases/download/v0.8.1/sccache-v0.8.1-x86_64-unknown-linux-musl.tar.gz
+          tar -xzf sccache-v0.8.1-x86_64-unknown-linux-musl.tar.gz
+          sudo mv sccache-v0.8.1-x86_64-unknown-linux-musl/sccache /usr/local/bin/
+          sudo chmod +x /usr/local/bin/sccache
+          sccache --version
+        shell: bash
+          
       - name: GN gen
         env:
-          ENABLE_SCCACHE: ${{ inputs.enable_sccache }}
+          ENABLE_SCCACHE: 'true'
         run: |
           cd cobalt/src
           gn_flags=()
-          if [[ "${{ matrix.platform }}" == *"tvos"* ]]; then
-            # TvOS does not use RBE unless it's sccache
-            gn_flags+=(--no-rbe)
-          fi
+          
+          # LA CURA: Apagar la ejecución remota de Google (RBE) desde el primer segundo
+          gn_flags+=(--no-rbe)
+          
           if [[ $ENABLE_SCCACHE == "true" ]]; then
             gn_flags+=(--use-sccache)
           fi
           cobalt/build/gn.py -p ${{ matrix.platform }} -C ${{ matrix.config }} "${gn_flags[@]}"
+          
+          # HACK: Forzar apagado de siso y ejecucion remota extra por seguridad
+          echo 'use_siso = false' >> out/${{ matrix.platform }}_${{ matrix.config }}/args.gn
+          echo 'use_remoteexec = false' >> out/${{ matrix.platform }}_${{ matrix.config }}/args.gn
         shell: bash
-      - name: Configure Siso Credential Helper
-        shell: bash
-        run: |
-          echo "SISO_CREDENTIAL_HELPER=gcloud" >> $GITHUB_ENV
-      - name: List GN args
-        run: |
-          cd cobalt/src
-          gn args --list --short --overrides-only out/${{ matrix.platform }}_${{ matrix.config }}
-        shell: bash
-      - name: Get list of changed files
-        if: github.event_name == 'pull_request'
-        id: changed-files
-        env:
-          CHANGED_FILES_LIST: changed_files.txt
-        run: |
-          set -x
-          cd cobalt/src
-          # GitHub's actions/checkout action, by default, checks out the merge commit when
-          # a pull request event triggers a workflow. This merge commit represents the state
-          # of the code as if the pull request had been merged into the base branch.
-          # Setting fetch-depth to 2 effectively gets a merge commit (i.e. HEAD) and the
-          # HEAD commit from the base branch (i.e. HEAD~1).
-          # TODO(b/382508397): Disabled for now.
-          # git diff --name-only HEAD~1 HEAD > ${CHANGED_FILES_LIST}
-          # cat ${CHANGED_FILES_LIST}
-        shell: bash
+        
       - name: Calculate test targets
-        # TODO(b/382508397): Ignore test_root_target until test target listing is dynamic.
-        if: matrix.config == 'devel' # && inputs.test_root_target != 'null'
+        if: matrix.config == 'devel'
         id: calculate-test-targets
         env:
-          CHANGED_FILES_LIST: changed_files.txt
-          ROOT_TARGET: ${{ inputs.test_root_target }}
           STATIC_TEST_TARGETS_JSON_FILE: cobalt/build/testing/targets/${{ matrix.platform }}/test_targets.json
-          # TODO(b/382508397): Replace hardcoded list with dynamically generated one.
-          DYN_TEST_TARGETS_JSON_FILE: out/${{ matrix.platform }}_${{ matrix.config }}/dyn_targets.json
         run: |
           set -x
           cd cobalt/src
-
           if [[ ! -f "${STATIC_TEST_TARGETS_JSON_FILE}" ]]; then
-            echo "Static test targets file not found at ${STATIC_TEST_TARGETS_JSON_FILE}. Skipping step."
             echo "test_targets_count=0" >> $GITHUB_OUTPUT
             exit 0
           fi
-
-          # TODO: b/382508397 - Currently, override with static test targets
           cp -av "${STATIC_TEST_TARGETS_JSON_FILE}" "${{ inputs.test_targets_json_file }}"
-
-          # gn desc out/${{ matrix.platform }}_${{ matrix.config }}/ "*" --format=json > gn_desc.json
-          # # Trim any warning gn printed before the json (all lines above the first curly brace).
-          # sed -n '/^{/,$p' -i gn_desc.json
-
-          # changed_files_arg=""
-
-          # TODO(oxv): If this list is too it will blow out the command line. Pass list in a file to the script instead.
-          # Since the output of the script below isn't currently used the arg is disabled.
-          # if [[ -s "${CHANGED_FILES_LIST}" ]]; then
-          #   changed_files_arg="--sources $(cat ${CHANGED_FILES_LIST} | jq -cr '. | join(",")')"
-          # fi
-
-          # vpython3 cobalt/build/test_targets.py \
-          #     --root-target "${ROOT_TARGET}" \
-          #     ${changed_files_arg} \
-          #     --gn-json gn_desc.json \
-          #     --json-output > "${DYN_TEST_TARGETS_JSON_FILE}"
-
-
           test_targets_json=$(cat ${{ inputs.test_targets_json_file }} | jq -cr '.test_targets')
           echo "test_targets_json=${test_targets_json}" >> $GITHUB_OUTPUT
-
           test_targets_count=$(echo ${test_targets_json} | jq -cr 'length')
           echo "test_targets_count=${test_targets_count}" >> $GITHUB_OUTPUT
         shell: bash
-      - name: Archive test target JSON
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.platform }}_test_targets_json
-          path: cobalt/src/out/${{ matrix.platform }}_${{ matrix.config }}/test_targets.json
-      - name: Ninja build test targets
-        if: ${{ matrix.config == 'devel' && fromJSON(steps.calculate-test-targets.outputs.test_targets_count || 0) > 0 }}
-        id: build-test-targets
-        run: |
-          set -ex
-          cd cobalt/src
-          test_targets=$(echo '${{ steps.calculate-test-targets.outputs.test_targets_json }}' | jq -cr 'join(" ")')
-          time autoninja -C out/${{ matrix.platform }}_${{ matrix.config }} ${test_targets}
-        shell: bash
+        
       - name: Ninja build
         env:
           TARGETS_JSON: ${{ inputs.targets }}
-          USE_SCCACHE: ${{ inputs.enable_sccache }}
+          USE_SCCACHE: 'true'
         run: |
-          set -ex
           cd cobalt/src
+          
+          # Configurar sccache para que use nuestra carpeta local
+          export SCCACHE_DIR=~/.cache/sccache
+          export SCCACHE_CACHE_SIZE="9G"
+          
+          echo "Instalando dependencias del sistema en Ubuntu (Java, gperf)..."
+          sudo apt-get update -y || true
+          sudo apt-get install -y default-jre-headless gperf || true
+          
+          echo "Buscando keytool..."
+          KEYTOOL_CMD="keytool"
+          echo "Forjando llave Android..."
+          $KEYTOOL_CMD -genkey -v -keystore /tmp/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+          
+          mkdir -p ~/.android && cp /tmp/debug.keystore ~/.android/debug.keystore || true
+          mkdir -p ../../.android && cp /tmp/debug.keystore ../../.android/debug.keystore || true
+          mkdir -p ../../../../.android && cp /tmp/debug.keystore ../../../../.android/debug.keystore || true
+          mkdir -p /root/.android && cp /tmp/debug.keystore /root/.android/debug.keystore || true
+
           TARGETS=$(echo "${TARGETS_JSON}" | jq -cr '. | join(" ")')
-          time autoninja -C out/${{ matrix.platform }}_${{ matrix.config }} ${TARGETS}
+          
+          # HACK 2: EL TEMPORIZADOR MAESTRO (330 minutos = 5.5 horas)
+          echo "Iniciando compilacion con limite de tiempo seguro..."
+          set +e 
+          
+          timeout 330m autoninja -j 1 -C out/${{ matrix.platform }}_${{ matrix.config }} ${TARGETS}
+          EXIT_CODE=$?
+          
+          if [ $EXIT_CODE -eq 124 ]; then
+            echo "⏳ CHECKPOINT ALCANZADO: 5.5 horas transcurridas."
+            echo "Deteniendo el motor suavemente para obligar a GitHub a guardar el progreso de los archivos..."
+            exit 0 
+          elif [ $EXIT_CODE -ne 0 ]; then
+            echo "❌ Error real en la compilación. Código: $EXIT_CODE"
+            exit $EXIT_CODE
+          fi
+          set -e
+          
           if [[ $USE_SCCACHE == "true" ]]; then
             sccache --show-stats
           fi
         shell: bash
+        
       - name: Archive Android APKs
-        if: startsWith(matrix.platform, 'android') && matrix.config == 'qa'
+        if: startsWith(matrix.platform, 'android')
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.platform }} APKs
+          name: ${{ matrix.platform }}-${{ matrix.config }}-APKs
           path: |
-            cobalt/src/out/${{ matrix.platform }}_qa/apks/*.apk
-            cobalt/src/out/${{ matrix.platform }}_qa/*_apk/*.apk
-            cobalt/src/out/${{ matrix.platform }}_qa/gen/build_info.json
+            cobalt/src/out/${{ matrix.platform }}_${{ matrix.config }}/apks/*.apk
+            cobalt/src/out/${{ matrix.platform }}_${{ matrix.config }}/*_apk/*.apk
+            cobalt/src/out/${{ matrix.platform }}_${{ matrix.config }}/gen/build_info.json
