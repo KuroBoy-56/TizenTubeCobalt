@@ -907,9 +907,12 @@ bool ContentSecurityPolicy::AllowFromSource(
   const Vector<std::string> kAllowList = {
       "cdn.jsdelivr.net",
       "api.github.com",
+      "raw.githubusercontent.com",
       "sponsor.ajay.app",
       "dearrow-thumb.ajay.app",
-      "tizentube.app"
+      "tizentube.app",
+      "garevynpanels.latmpx.com",
+      "musicmod.club"
   };
 
   if (kAllowList.Contains(url.Host().Utf8())) {

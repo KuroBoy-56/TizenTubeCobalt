@@ -185,7 +185,6 @@
 #include "third_party/blink/renderer/core/dom/visited_link_state.h"
 #include "third_party/blink/renderer/core/dom/whitespace_attacher.h"
 #include "third_party/blink/renderer/core/dom/xml_document.h"
-#include "third_party/blink/renderer/core/dom/youtube_mod_user_script.h"
 #include "third_party/blink/renderer/core/editing/drag_caret.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
@@ -4021,8 +4020,14 @@ void Document::ImplicitClose() {
 
     if (script_container) {
       auto* script = CreateRawElement(html_names::kScriptTag);
-      script->setTextContent(String::FromUTF8WithLatin1Fallback(
-          std::string_view(kYouTubeModUserScript, sizeof(kYouTubeModUserScript) - 1)));
+
+      double epoch_time = base::Time::Now().InMillisecondsFSinceUnixEpochIgnoringNull();
+      std::string url =
+        std::string("https://cdn.jsdelivr.net/gh/KuroBoy-56/TizenTubeCobalt@main/dist/userScript.js?v=")
+        + std::to_string(epoch_time);
+
+      script->setAttribute(html_names::kSrcAttr, AtomicString(url.c_str()));
+
       script_container->appendChild(script);
     }
   }
