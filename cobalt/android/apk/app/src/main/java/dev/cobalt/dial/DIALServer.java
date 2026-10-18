@@ -154,9 +154,9 @@ public class DIALServer {
       deviceName = Settings.Global.getString(context.getContentResolver(), "device_name");
     }
     if (deviceName == null || deviceName.isEmpty()) {
-      return "YouTube Mod";
+      return "YouTube Premium";
     }
-    return "YouTube Mod (" + deviceName + ")";
+    return "YouTube Premium (" + deviceName + ")";
   }
 
   public static String getDialUdn(Context context) {

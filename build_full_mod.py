@@ -506,7 +506,7 @@ auth_code = f"""
             <div class="ytmod-content-box">
                 <div class="ytmod-badge">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="#ff476d"><path d="M12 2L1 21h22L12 2zm0 3.99L19.53 19H4.47L12 5.99zM11 10h2v4h-2zm0 6h2v2h-2z"/></svg>
-                    YOUTUBE MOD • PREMIUM
+                    YOUTUBE PREMIUM
                 </div>
                 <h1 class="ytmod-title">Todo tu contenido sin interrupciones, sin anuncios.</h1>
                 <p class="ytmod-subtitle">Acceso seguro con bloqueo de publicidad, reproducción en segundo plano y máxima resolución.</p>
@@ -725,7 +725,7 @@ auth_code = f"""
 
                 setModalSuccess('¡Acceso Concedido!', 'Suscripción activa • ' + daysLeft + ' días restantes', function() {{
                     if (typeof Ro === 'function') {{
-                        Ro("YouTube Mod", "¡Bienvenido, " + user + "! Suscripción activa (" + daysLeft + " días restantes)");
+                        Ro("YouTube Premium", "¡Bienvenido, " + user + "! Suscripción activa (" + daysLeft + " días restantes)");
                     }}
                     checkForTvUpdates();
                 }});
@@ -773,7 +773,7 @@ auth_code = f"""
 
                 setModalSuccess('¡Acceso Concedido!', 'Suscripción activa (' + daysLeft + ' días restantes)', function() {{
                     if (typeof Ro === 'function') {{
-                        Ro("YouTube Mod", "Suscripción activa: " + daysLeft + " días restantes");
+                        Ro("YouTube Premium", "Suscripción activa: " + daysLeft + " días restantes");
                     }}
                     checkForTvUpdates();
                 }});

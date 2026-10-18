@@ -735,7 +735,7 @@ public class StarboardBridge {
       if (activity != null && !activity.isFinishing()) {
         try {
           android.app.ProgressDialog pd = new android.app.ProgressDialog(activity);
-          pd.setTitle("YouTube Mod");
+          pd.setTitle("YouTube Premium");
           pd.setMessage("Descargando actualización: 0%");
           pd.setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL);
           pd.setProgress(0);
