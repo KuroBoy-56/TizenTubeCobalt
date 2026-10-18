@@ -121,7 +121,7 @@ runs:
           echo "Iniciando compilacion con limite de tiempo seguro (320m)..."
           set +e 
           
-          timeout 320m autoninja -j 1 -C out/${{ matrix.platform }}_${{ matrix.config }} ${TARGETS}
+          timeout 320m autoninja -j 2 -C out/${{ matrix.platform }}_${{ matrix.config }} ${TARGETS}
           EXIT_CODE=$?
           
           if [ $EXIT_CODE -eq 124 ]; then
