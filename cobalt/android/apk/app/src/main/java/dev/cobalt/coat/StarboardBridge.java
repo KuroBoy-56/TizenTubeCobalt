@@ -727,24 +727,76 @@ public class StarboardBridge {
   protected boolean installAppFromURL(String url) {
     java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newSingleThreadExecutor();
     android.os.Handler mainHandler = new android.os.Handler(android.os.Looper.getMainLooper());
+    
+    // Dialog placeholder on main thread
+    final android.app.ProgressDialog[] dialogHolder = new android.app.ProgressDialog[1];
+    mainHandler.post(() -> {
+      Activity activity = mActivityHolder.get();
+      if (activity != null && !activity.isFinishing()) {
+        try {
+          android.app.ProgressDialog pd = new android.app.ProgressDialog(activity);
+          pd.setTitle("YouTube Mod");
+          pd.setMessage("Descargando actualización: 0%");
+          pd.setProgressStyle(android.app.ProgressDialog.STYLE_HORIZONTAL);
+          pd.setProgress(0);
+          pd.setMax(100);
+          pd.setCancelable(false);
+          pd.show();
+          dialogHolder[0] = pd;
+        } catch (Exception ignored) {}
+      }
+    });
+
     executor.execute(() -> {
       java.io.File apkFile = new java.io.File(mAppContext.getFilesDir(), "downloaded_app.apk");
       boolean success = false;
-      try (java.io.InputStream in = new java.net.URL(url).openStream();
-           java.io.OutputStream out = new java.io.FileOutputStream(apkFile)) {
-        byte[] buffer = new byte[8192];
-        int len;
-        long total = 0;
-        while ((len = in.read(buffer)) != -1) {
-          out.write(buffer, 0, len);
-          total += len;
+      try {
+        java.net.URLConnection conn = new java.net.URL(url).openConnection();
+        conn.setConnectTimeout(15000);
+        conn.setReadTimeout(30000);
+        long fileLength = conn.getContentLengthLong();
+
+        try (java.io.InputStream in = conn.getInputStream();
+             java.io.OutputStream out = new java.io.FileOutputStream(apkFile)) {
+          byte[] buffer = new byte[16384];
+          int len;
+          long total = 0;
+          int lastProgress = 0;
+          while ((len = in.read(buffer)) != -1) {
+            out.write(buffer, 0, len);
+            total += len;
+            if (fileLength > 0) {
+              int progress = (int) ((total * 100) / fileLength);
+              if (progress != lastProgress) {
+                lastProgress = progress;
+                final int p = progress;
+                mainHandler.post(() -> {
+                  android.app.ProgressDialog pd = dialogHolder[0];
+                  if (pd != null && pd.isShowing()) {
+                    pd.setProgress(p);
+                    pd.setMessage("Descargando actualización: " + p + "%");
+                  }
+                });
+              }
+            }
+          }
+          out.flush();
+          success = true;
         }
-        out.flush();
-        success = true;
       } catch (Exception e) {
+        success = false;
       }
-      if (success) {
-        mainHandler.post(() -> {
+
+      final boolean finalSuccess = success;
+      mainHandler.post(() -> {
+        android.app.ProgressDialog pd = dialogHolder[0];
+        if (pd != null && pd.isShowing()) {
+          try {
+            pd.dismiss();
+          } catch (Exception ignored) {}
+        }
+
+        if (finalSuccess) {
           try {
             android.net.Uri contentUri = androidx.core.content.FileProvider.getUriForFile(
                 mAppContext,
@@ -759,11 +811,9 @@ public class StarboardBridge {
             } else {
               mAppContext.startActivity(installIntent);
             }
-          } catch (Exception e) {
-          }
-        });
-      } else {
-      }
+          } catch (Exception ignored) {}
+        }
+      });
       executor.shutdown();
     });
     return true;
