@@ -17,6 +17,11 @@ on:
         required: true
         type: boolean
         default: false
+      attempt:
+        description: 'Número de relanzamiento automático (uso interno).'
+        required: false
+        type: string
+        default: '1'
 
 jobs:
   # FRANCOTIRADOR: Únicamente la versión universal para TV Box y Móviles
@@ -30,3 +35,25 @@ jobs:
       nightly: ${{ github.event.inputs.nightly }}
     secrets:
       datadog_api_key: ${{ secrets.DD_API_KEY }}
+
+  # Si la compilación se detuvo en el checkpoint, relanza el workflow para continuar desde el caché.
+  auto-rerun:
+    needs: [android-arm]
+    if: ${{ github.event_name != 'pull_request' && needs.android-arm.outputs.timed_out == 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Relanzar compilación con el caché guardado
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ATTEMPT: ${{ github.event.inputs.attempt || '1' }}
+        run: |
+          # Tope de seguridad para no quedar en bucle si el caché no avanza.
+          if [ "$ATTEMPT" -ge 10 ]; then
+            echo "Se alcanzó el máximo de 10 relanzamientos automáticos. Deteniendo."
+            exit 1
+          fi
+          NEXT=$((ATTEMPT + 1))
+          echo "Relanzando compilación (intento $NEXT) en ${{ github.ref_name }}..."
+          gh workflow run android_27.lts.yaml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" -f nightly=false -f attempt="$NEXT"

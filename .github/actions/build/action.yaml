@@ -15,6 +15,10 @@ inputs:
     default: 'false'
   sccache_gcs_key:
     description: GCS SA key to read/write to bucket
+outputs:
+  timed_out:
+    description: "true si ninja se detuvo en el checkpoint de tiempo (falta compilar)."
+    value: ${{ steps.ninja.outputs.timed_out }}
 runs:
   using: "composite"
   steps:
@@ -84,6 +88,7 @@ runs:
         shell: bash
         
       - name: Ninja build
+        id: ninja
         env:
           TARGETS_JSON: ${{ inputs.targets }}
           USE_SCCACHE: 'true'
@@ -127,6 +132,7 @@ runs:
           if [ $EXIT_CODE -eq 124 ]; then
             echo "⏳ CHECKPOINT ALCANZADO: 5.3 horas (320 minutos) transcurridas."
             echo "Deteniendo el motor suavemente para asegurar y guardar el caché en GitHub..."
+            echo "timed_out=true" >> $GITHUB_OUTPUT
             if [[ $USE_SCCACHE == "true" ]]; then
               sccache --show-stats || true
               sccache --stop-server || true
