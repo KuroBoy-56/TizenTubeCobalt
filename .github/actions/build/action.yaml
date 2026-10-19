@@ -15,6 +15,9 @@ inputs:
     default: 'false'
   sccache_gcs_key:
     description: GCS SA key to read/write to bucket
+  android_keystore_b64:
+    description: "Keystore de release en base64 (alias androiddebugkey, clave android)."
+    default: ''
 outputs:
   timed_out:
     description: "true si ninja se detuvo en el checkpoint de tiempo (falta compilar)."
@@ -92,6 +95,7 @@ runs:
         env:
           TARGETS_JSON: ${{ inputs.targets }}
           USE_SCCACHE: 'true'
+          ANDROID_KEYSTORE_B64: ${{ inputs.android_keystore_b64 }}
         run: |
           cd cobalt/src
           
@@ -105,8 +109,14 @@ runs:
           
           echo "Buscando keytool..."
           KEYTOOL_CMD="keytool"
-          echo "Forjando llave Android..."
-          $KEYTOOL_CMD -genkey -v -keystore /tmp/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+          # Misma llave en cada build: si cambia, Android no instala la actualización encima.
+          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+            echo "Usando llave de release fija (secreto ANDROID_KEYSTORE_B64)..."
+            echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/debug.keystore
+          else
+            echo "⚠️ Sin secreto ANDROID_KEYSTORE_B64: firmando con llave temporal (las actualizaciones NO se instalarán encima)."
+            $KEYTOOL_CMD -genkey -v -keystore /tmp/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
+          fi
           
           mkdir -p ~/.android && cp /tmp/debug.keystore ~/.android/debug.keystore || true
           mkdir -p ../../.android && cp /tmp/debug.keystore ../../.android/debug.keystore || true

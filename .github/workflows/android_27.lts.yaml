@@ -35,6 +35,39 @@ jobs:
       nightly: ${{ github.event.inputs.nightly }}
     secrets:
       datadog_api_key: ${{ secrets.DD_API_KEY }}
+      android_keystore_b64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+
+  # Publica la APK como Release (enlace fijo: releases/latest/download/YouTubeModTV.apk).
+  # Solo con la llave fija, para no publicar APKs que no se puedan instalar encima.
+  release:
+    needs: [android-arm]
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.android-arm.outputs.timed_out != 'true' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Comprobar llave fija
+        id: ks
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          if [ -n "$KS" ]; then echo "ok=true" >> $GITHUB_OUTPUT; else echo "Sin ANDROID_KEYSTORE_B64: no se publica release."; fi
+      - name: Descargar APK
+        if: steps.ks.outputs.ok == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: android-arm-gold-APKs
+          path: apk
+      - name: Publicar release
+        if: steps.ks.outputs.ok == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          APK=$(find apk -name '*.apk' | head -1)
+          cp "$APK" YouTubeModTV.apk
+          gh release create "tv-${{ github.run_number }}" YouTubeModTV.apk --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" --title "YouTube Mod TV #${{ github.run_number }}" \
+            --notes "Build ${{ github.sha }}" --latest
 
   # Si la compilación se detuvo en el checkpoint, relanza el workflow para continuar desde el caché.
   auto-rerun:

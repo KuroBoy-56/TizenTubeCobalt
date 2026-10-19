@@ -19,6 +19,8 @@ on:
         required: false
       sccache_gcs_key:
         required: false
+      android_keystore_b64:
+        required: false
     outputs:
       timed_out:
         description: 'true si la compilación se detuvo por tiempo y debe continuar.'
@@ -178,6 +180,7 @@ jobs:
           test_targets_json_file: out/${{ matrix.platform }}_${{ matrix.config }}/test_targets.json
           enable_sccache: ${{ needs.initialize.outputs.enable_sccache == 'true' }}
           sccache_gcs_key: ${{ secrets.sccache_gcs_key }}
+          android_keystore_b64: ${{ secrets.android_keystore_b64 }}
 
       - name: Release Package
         if:  (matrix.config == 'qa' || matrix.config == 'gold')
