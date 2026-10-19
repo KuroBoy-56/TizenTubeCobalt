@@ -19,6 +19,10 @@ on:
         required: false
       sccache_gcs_key:
         required: false
+    outputs:
+      timed_out:
+        description: 'true si la compilación se detuvo por tiempo y debe continuar.'
+        value: ${{ jobs.build.outputs.timed_out }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ inputs.platform }} @ ${{ github.head_ref || github.sha }}-${{ github.ref }}
@@ -116,6 +120,8 @@ jobs:
     permissions: {}
     runs-on: ${{ fromJSON(needs.initialize.outputs.build_runners) }}
     name: ${{ matrix.name }}_${{ matrix.config }}
+    outputs:
+      timed_out: ${{ steps.build.outputs.timed_out }}
     strategy:
       fail-fast: false
       matrix:
