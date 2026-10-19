@@ -857,10 +857,14 @@
         });
     }, 30 * 60 * 1000);
 
-    // --- IN-APP UPDATER (updateTV.php) ---
+    // --- IN-APP UPDATER ---
+    // Soporta las dos formas del panel:
+    //  - check_update.php / yt_versions.json: devuelve la ultima version (sin "update_available");
+    //    el cliente compara version_code. Changelog en "release_notes".
+    //  - updateTV.php: devuelve "update_available" y lee la version por GET (v_code/v_name).
+    var UPDATE_ENDPOINT = 'check_update.php';
     function checkForTvUpdates() {
-        // El panel (updateTV.php) lee la version por GET ($_GET['v_code']/$_GET['v_name']).
-        var qs = 'updateTV.php?v_code=' + encodeURIComponent(CURRENT_TV_VERSION_CODE) +
+        var qs = UPDATE_ENDPOINT + '?v_code=' + encodeURIComponent(CURRENT_TV_VERSION_CODE) +
                  '&v_name=' + encodeURIComponent(CURRENT_TV_VERSION_NAME);
         sendApiRequest(qs, {
             action: 'check',
@@ -868,10 +872,15 @@
             v_name: CURRENT_TV_VERSION_NAME
         }, function(err, data) {
             if (!data || !data.download_url) return;
-            // Version obsoleta marcada en el panel -> actualizacion obligatoria.
-            var isObsolete = Array.isArray(data.obsolete_versions) &&
-                data.obsolete_versions.indexOf(Number(CURRENT_TV_VERSION_CODE)) !== -1;
-            if (data.update_available || isObsolete) {
+            var latestCode = Number(data.version_code) || 0;
+            var curCode = Number(CURRENT_TV_VERSION_CODE) || 0;
+            // Version actual marcada obsoleta en el panel -> actualizacion obligatoria.
+            var isObsolete = (Array.isArray(data.obsolete_versions) &&
+                              data.obsolete_versions.indexOf(curCode) !== -1);
+            // Hay update si el panel lo dice, o (sin ese campo) si la ultima version es mayor.
+            var hasUpdate = (data.update_available === true) ||
+                            (data.update_available === undefined && latestCode > curCode);
+            if (hasUpdate || isObsolete) {
                 showTvUpdateModal(data, data.is_mandatory === true || isObsolete);
             }
         });
@@ -890,8 +899,8 @@
 
         if (!modal) return;
         title.textContent = 'Nueva Version ' + (updateData.version_name || 'TV');
-        // El panel manda el changelog en "changelog" (con "notes" como respaldo).
-        notes.textContent = updateData.changelog || updateData.notes || 'Mejoras de rendimiento y correcciones de seguridad.';
+        // El panel manda las notas en "release_notes" (changelog/notes como respaldo).
+        notes.textContent = updateData.release_notes || updateData.changelog || updateData.notes || 'Mejoras de rendimiento y correcciones de seguridad.';
 
         // Actualizacion obligatoria: no se puede posponer.
         if (isMandatory) {
