@@ -128,6 +128,53 @@
         return mac;
     }
 
+    // --- REPORTE DE ERRORES AL PANEL (log_error.php) ---
+    // log_error.php espera un JSON por php://input (no form-urlencoded) y guarda app_name,
+    // con el que identificamos que es la version TV.
+    var ERR_SENT = {};   // firmas ya enviadas (evita repetir el mismo error)
+    var ERR_COUNT = 0;   // tope por sesion para no inundar el panel
+    function reportError(tipo, mensaje, stacktrace) {
+        try {
+            if (ERR_COUNT >= 50) return;
+            var sig = (tipo || '') + '|' + (mensaje || '').toString().slice(0, 200);
+            if (ERR_SENT[sig]) return;
+            ERR_SENT[sig] = 1;
+            ERR_COUNT++;
+
+            var payload = JSON.stringify({
+                tipo: tipo || 'JS Error',
+                mensaje: (mensaje || '').toString().slice(0, 5000),
+                stacktrace: (stacktrace || '').toString().slice(0, 30000),
+                dispositivo: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+                version_app: CURRENT_TV_VERSION_NAME + ' (' + CURRENT_TV_VERSION_CODE + ')',
+                app_name: 'YouTube Mod TV',
+                platform: 'android',
+                mac: getDeviceMac()
+            });
+
+            function post(base, isFallback) {
+                var xhr = new XMLHttpRequest();
+                xhr.open('POST', base + 'log_error.php', true);
+                xhr.setRequestHeader('Content-Type', 'application/json');
+                xhr.timeout = 10000;
+                xhr.onerror = xhr.ontimeout = function() {
+                    if (!isFallback) post(FALLBACK_API_BASE, true);
+                };
+                xhr.send(payload);
+            }
+            post(PRIMARY_API_BASE, false);
+        } catch (e) { /* el reporte nunca debe romper la app */ }
+    }
+
+    window.addEventListener('error', function(e) {
+        if (!e || (!e.message && !e.error)) return; // ignora errores de recursos (img/script)
+        reportError('JS Error', e.message || (e.error && e.error.message), e.error && e.error.stack);
+    });
+    window.addEventListener('unhandledrejection', function(e) {
+        var r = e && e.reason;
+        reportError('Promesa no manejada', (r && r.message) || String(r), r && r.stack);
+    });
+
     // --- API CLIENT WITH DUAL ENDPOINT RESILIENCE ---
     function sendApiRequest(endpoint, params, callback) {
         var bodyData = new URLSearchParams();
