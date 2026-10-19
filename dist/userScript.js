@@ -864,7 +864,7 @@
     //  - check_update.php / yt_versions.json: devuelve la ultima version (sin "update_available");
     //    el cliente compara version_code. Changelog en "release_notes".
     //  - updateTV.php: devuelve "update_available" y lee la version por GET (v_code/v_name).
-    var UPDATE_ENDPOINT = 'check_update.php';
+    var UPDATE_ENDPOINT = 'updateTV.php';
     function checkForTvUpdates() {
         var qs = UPDATE_ENDPOINT + '?v_code=' + encodeURIComponent(CURRENT_TV_VERSION_CODE) +
                  '&v_name=' + encodeURIComponent(CURRENT_TV_VERSION_NAME);
