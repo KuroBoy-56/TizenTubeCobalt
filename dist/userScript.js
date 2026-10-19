@@ -845,17 +845,25 @@
 
     // --- IN-APP UPDATER (updateTV.php) ---
     function checkForTvUpdates() {
-        sendApiRequest('updateTV.php', {
+        // El panel (updateTV.php) lee la version por GET ($_GET['v_code']/$_GET['v_name']).
+        var qs = 'updateTV.php?v_code=' + encodeURIComponent(CURRENT_TV_VERSION_CODE) +
+                 '&v_name=' + encodeURIComponent(CURRENT_TV_VERSION_NAME);
+        sendApiRequest(qs, {
             action: 'check',
-            version_code: CURRENT_TV_VERSION_CODE
+            v_code: CURRENT_TV_VERSION_CODE,
+            v_name: CURRENT_TV_VERSION_NAME
         }, function(err, data) {
-            if (data && data.update_available && data.download_url) {
-                showTvUpdateModal(data);
+            if (!data || !data.download_url) return;
+            // Version obsoleta marcada en el panel -> actualizacion obligatoria.
+            var isObsolete = Array.isArray(data.obsolete_versions) &&
+                data.obsolete_versions.indexOf(Number(CURRENT_TV_VERSION_CODE)) !== -1;
+            if (data.update_available || isObsolete) {
+                showTvUpdateModal(data, data.is_mandatory === true || isObsolete);
             }
         });
     }
 
-    function showTvUpdateModal(updateData) {
+    function showTvUpdateModal(updateData, isMandatory) {
         var modal = document.getElementById('ytmod-update-modal');
         var title = document.getElementById('ytmod-update-title');
         var notes = document.getElementById('ytmod-update-notes');
@@ -868,11 +876,18 @@
 
         if (!modal) return;
         title.textContent = 'Nueva Version ' + (updateData.version_name || 'TV');
-        notes.textContent = updateData.notes || 'Mejoras de rendimiento y correcciones de seguridad.';
+        // El panel manda el changelog en "changelog" (con "notes" como respaldo).
+        notes.textContent = updateData.changelog || updateData.notes || 'Mejoras de rendimiento y correcciones de seguridad.';
 
-        btnLater.onclick = function() {
-            modal.style.display = 'none';
-        };
+        // Actualizacion obligatoria: no se puede posponer.
+        if (isMandatory) {
+            btnLater.style.display = 'none';
+        } else {
+            btnLater.style.display = 'inline-block';
+            btnLater.onclick = function() {
+                modal.style.display = 'none';
+            };
+        }
 
         btnNow.onclick = function() {
             btnArea.style.display = 'none';
