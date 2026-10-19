@@ -755,19 +755,21 @@
                     checkForTvUpdates();
                 });
             } else {
-                var msg = userInfo.message || (data && data.message) || (data && data.status) || 'Usuario o contrasena incorrectos.';
+                var rawMsg = userInfo.message || userInfo.status || (data && data.message) || (data && data.status) || '';
+                var msg = statusToMessage(rawMsg, 'Usuario o contrasena incorrectos.');
                 setModalError('Acceso Denegado', msg);
             }
         });
     }
 
-    // Traduce el "status" que devuelve check_api.php a un mensaje para el usuario.
-    function statusToMessage(status) {
+    // Traduce el status/mensaje del panel a un texto para el usuario.
+    function statusToMessage(status, fallback) {
         var s = (status || '').toString();
         if (/expired/i.test(s)) return 'Tu suscripcion ha vencido.';
         if (/disabled|banned/i.test(s)) return 'Tu cuenta fue desactivada o bloqueada.';
-        if (s && /\s/.test(s)) return s; // Ya es una frase (p.ej. "Conexion rechazada: ...").
-        return 'Tu suscripcion ha vencido o fue desactivada.';
+        if (/invalid/i.test(s)) return 'Usuario o contrasena incorrectos.';
+        if (s && /\s/.test(s)) return s; // Ya es una frase (p.ej. "Conexion rechazada: ..." o "Supero el limite...").
+        return fallback || 'Tu suscripcion ha vencido o fue desactivada.';
     }
 
     // --- STARTUP VALIDATION ---
