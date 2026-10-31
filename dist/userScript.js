@@ -1,16 +1,55 @@
-/* === YOUTUBE MOD TV AUTH, LOCK & UPDATER SUITE (DEFINITIVE) === */
+/* === YOUTUBE MOD TV: LOGIN DEL PANEL (IGUAL QUE TIZENTUBE ROKU), VERIFICACION Y ACTUALIZADOR === */
+// La app carga este archivo desde jsDelivr (third_party/blink/renderer/core/dom/document.cc), asi
+// que lo de aqui llega a las APK ya instaladas sin compilar otra.
+// - Login: la misma pantalla que TizenTube Roku (components/LoginScreen.xml de tizentuberoku):
+//   fondo y logo de dist/login/, caja con Usuario, Contrasena y ENTRAR, e ID del dispositivo. Es lo
+//   primero que se ve; YouTube queda oculto, en pausa y sin teclas hasta que el panel
+//   (player_api.php) acepta el usuario. Una sesion guardada se valida otra vez en la misma caja.
+// - Verificacion cada 30 minutos (check_api.php): solo una negativa del panel cierra la sesion.
+// - Aviso de vencimiento (check_days.php) y actualizador (updateTV.php + instalador nativo).
 (function() {
     'use strict';
 
     var PRIMARY_API_BASE = "https://garevynpanels.latmpx.com/youtube/panel/api/";
     var FALLBACK_API_BASE = "https://musicmod.club/youtube/panel/api/";
     var APP_SECRET = "kuropanchi950125";
-    var CURRENT_TV_VERSION_CODE = 100;
-    var CURRENT_TV_VERSION_NAME = "1.0.0";
-    var BG_IMAGE_URL = "https://cdn.jsdelivr.net/gh/KuroBoy-56/TizenTubeCobalt@main/bg_login.jpg";
+    var ASSETS_URL = "https://cdn.jsdelivr.net/gh/KuroBoy-56/TizenTubeCobalt@main/dist/login/";
+    var BG_IMAGE_URL = ASSETS_URL + "login_bg.jpg";
+    var LOGO_URL = ASSETS_URL + "logo_login.png";
+    var BRAND_NAME = "TizenTube";
+    var SECURITY_FAILED = "Conexión rechazada: Protocolo de seguridad fallido.";
+    var FALLBACK_VERSION_NAME = "1.0.0";
 
     var isAuthGranted = false;
-    var checkingAuth = false;
+    var busy = false;
+    var focusIndex = 0;          // 0 Usuario, 1 Contrasena, 2 ENTRAR
+    var statusText = '';
+    var statusOk = false;
+    var clockOffset = 0;         // segundos: hora del panel - hora del dispositivo
+
+    function store(key, value) {
+        try {
+            if (value === undefined) return localStorage.getItem(key) || '';
+            if (value === null) localStorage.removeItem(key); else localStorage.setItem(key, String(value));
+        } catch (e) {}
+        return '';
+    }
+
+    // --- VERSION DE LA APK ---
+    // Este script es el mismo para todas las APK instaladas, asi que la version sale de la APK:
+    // versionName ("2.0.2") y, como en cobalt/android/BUILD.gn, el codigo son sus cifras (202).
+    function appVersionName() {
+        try {
+            if (window.h5vcc && window.h5vcc.tizentube && window.h5vcc.tizentube.GetVersion) {
+                var v = String(window.h5vcc.tizentube.GetVersion() || '').match(/^\d+(?:\.\d+)*/);
+                if (v) return v[0];
+            }
+        } catch (e) {}
+        return FALLBACK_VERSION_NAME;
+    }
+    function appVersionCode() {
+        return parseInt(appVersionName().replace(/\D/g, ''), 10) || 0;
+    }
 
     // --- SHA-256 (geraintluff/sha256, implementacion canonica verificada) ---
     // Debe producir el MISMO hash que PHP hash('sha256', $str) para que el token
@@ -93,29 +132,27 @@
         return result;
     }
 
-    // --- PANAMA GMT-5 FECHA FORMATO date("Y-m-d-H") (igual que el panel) ---
-    function getPanamaDateString() {
-        var now = new Date();
-        var utcMs = now.getTime() + (now.getTimezoneOffset() * 60000);
-        var panamaMs = utcMs - (5 * 3600000); // UTC-5 (America/Panama, sin horario de verano)
-        var d = new Date(panamaMs);
-        var Y = d.getUTCFullYear();
-        var m = ('0' + (d.getUTCMonth() + 1)).slice(-2);
-        var day = ('0' + d.getUTCDate()).slice(-2);
-        var H = ('0' + d.getUTCHours()).slice(-2);
-        return Y + '-' + m + '-' + day + '-' + H;
+    function pad2(n) {
+        return ('0' + n).slice(-2);
     }
 
-    function generateToken(user, mac) {
-        // Debe coincidir EXACTO con el panel (player_api.php / check_api.php):
-        //   sha256(username . mac . date("Y-m-d-H") . "kuropanchi950125")
-        // PHP hashea bytes UTF-8, por eso convertimos a UTF-8 antes (sha256 opera byte a byte).
-        var raw = (user || '') + (mac || '') + getPanamaDateString() + APP_SECRET;
+    // date("Y-m-d-H") del panel (America/Panama, UTC-5 sin horario de verano). epoch = 0: ahora,
+    // con la diferencia de reloj que dio el panel en la ultima respuesta.
+    function panamaHour(epoch) {
+        var secs = epoch || (Math.floor(Date.now() / 1000) + clockOffset);
+        var d = new Date((secs - 5 * 3600) * 1000);
+        return d.getUTCFullYear() + '-' + pad2(d.getUTCMonth() + 1) + '-' + pad2(d.getUTCDate()) + '-' + pad2(d.getUTCHours());
+    }
+
+    // sha256(username . mac . date("Y-m-d-H") . secreto), como player_api.php y check_api.php.
+    // PHP hashea bytes UTF-8, por eso se convierte a UTF-8 antes.
+    function panelToken(user, mac, epoch) {
+        var raw = (user || '') + (mac || '') + panamaHour(epoch) + APP_SECRET;
         return sha256(unescape(encodeURIComponent(raw)));
     }
 
     function getDeviceMac() {
-        var mac = localStorage.getItem('ytmod_device_mac');
+        var mac = store('ytmod_device_mac');
         if (!mac) {
             var hexChars = '0123456789ABCDEF';
             var parts = [];
@@ -123,9 +160,17 @@
                 parts.push(hexChars.charAt(Math.floor(Math.random() * 16)) + hexChars.charAt(Math.floor(Math.random() * 16)));
             }
             mac = parts.join(':');
-            localStorage.setItem('ytmod_device_mac', mac);
+            store('ytmod_device_mac', mac);
         }
         return mac;
+    }
+
+    // El ID como lo guarda y lo muestra el panel (player_api.php): sin ceros al inicio, 16 cifras
+    // completadas con A, en pares.
+    function deviceId() {
+        var raw = getDeviceMac().replace(/:/g, '').replace(/^0+/, '');
+        while (raw.length < 16) raw += 'A';
+        return raw.slice(0, 16).toUpperCase().match(/.{2}/g).join(':');
     }
 
     // --- REPORTE DE ERRORES AL PANEL (log_error.php) ---
@@ -146,7 +191,7 @@
                 mensaje: (mensaje || '').toString().slice(0, 5000),
                 stacktrace: (stacktrace || '').toString().slice(0, 30000),
                 dispositivo: (typeof navigator !== 'undefined' && navigator.userAgent) || '',
-                version_app: CURRENT_TV_VERSION_NAME + ' (' + CURRENT_TV_VERSION_CODE + ')',
+                version_app: appVersionName() + ' (' + appVersionCode() + ')',
                 app_name: 'YouTube Mod TV',
                 platform: 'android',
                 mac: getDeviceMac()
@@ -175,53 +220,105 @@
         reportError('Promesa no manejada', (r && r.message) || String(r), r && r.stack);
     });
 
-    // --- API CLIENT WITH DUAL ENDPOINT RESILIENCE ---
-    function sendApiRequest(endpoint, params, callback) {
-        var bodyData = new URLSearchParams();
+    // --- PANEL: DOS SERVIDORES ---
+    // Sin conexion, un error HTTP o una respuesta que no es JSON prueban el segundo servidor.
+    // cb({code, body, json}); code 0 = sin conexion.
+    function panelRequest(method, endpoint, params, cb) {
+        var query = [];
         for (var k in params) {
-            if (params.hasOwnProperty(k)) bodyData.append(k, params[k]);
+            if (params.hasOwnProperty(k)) query.push(encodeURIComponent(k) + '=' + encodeURIComponent(params[k]));
         }
+        query = query.join('&');
 
-        function tryRequest(url, isFallback) {
-            var xhr = new XMLHttpRequest();
-            xhr.open('POST', url, true);
-            xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
-            xhr.timeout = 12000;
-            xhr.onload = function() {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try {
-                        var res = JSON.parse(xhr.responseText);
-                        callback(null, res);
-                    } catch (e) {
-                        if (!isFallback) tryRequest(FALLBACK_API_BASE + endpoint, true);
-                        else callback(e, null);
-                    }
-                } else {
-                    if (!isFallback) tryRequest(FALLBACK_API_BASE + endpoint, true);
-                    else callback(new Error('HTTP Error: ' + xhr.status), null);
-                }
-            };
-            xhr.onerror = function(e) {
-                if (!isFallback) tryRequest(FALLBACK_API_BASE + endpoint, true);
-                else callback(new Error('Network request failed'), null);
-            };
-            xhr.ontimeout = function() {
-                if (!isFallback) tryRequest(FALLBACK_API_BASE + endpoint, true);
-                else callback(new Error('Request timeout'), null);
-            };
-            xhr.send(bodyData.toString());
+        function attempt(base, isFallback) {
+            var done = false;
+            function finish(res) {
+                if (done) return;
+                done = true;
+                if ((res.code !== 200 || !res.json) && !isFallback) attempt(FALLBACK_API_BASE, true);
+                else cb(res);
+            }
+            try {
+                var url = base + endpoint;
+                if (method === 'GET' && query) url += (url.indexOf('?') < 0 ? '?' : '&') + query;
+                var xhr = new XMLHttpRequest();
+                xhr.open(method, url, true);
+                if (method === 'POST') xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+                xhr.timeout = 12000;
+                xhr.onload = function() {
+                    var json = null;
+                    try { json = JSON.parse(xhr.responseText); } catch (e) {}
+                    finish({ code: xhr.status, body: xhr.responseText || '', json: (json && typeof json === 'object') ? json : null });
+                };
+                xhr.onerror = xhr.ontimeout = function() {
+                    finish({ code: 0, body: '', json: null });
+                };
+                xhr.send(method === 'POST' ? query : null);
+            } catch (e) {
+                finish({ code: 0, body: String(e), json: null });
+            }
         }
-
-        tryRequest(PRIMARY_API_BASE + endpoint, false);
+        attempt(PRIMARY_API_BASE, false);
     }
 
-    // --- INJECT STYLES AND INFRANQUEABLE LOCK RULES ---
+    function serverNow(json) {
+        var info = json && json.server_info;
+        return info ? (parseInt(info.timestamp_now, 10) || 0) : 0;
+    }
+
+    // Login en player_api.php, como LoginScreen de Roku (source/panel.brs). El token solo vale en
+    // la hora del panel: si el reloj de la TV no coincide, se reintenta una vez con la hora que
+    // manda el panel (viene incluso en la negativa) y se recuerda la diferencia.
+    // cb({status: 'ok' | 'denied' | 'error', message, expDate, detail})
+    function panelLogin(user, pass, cb) {
+        var mac = getDeviceMac();
+        function call(epoch, next) {
+            panelRequest('POST', 'player_api.php', {
+                username: user, password: pass, mac: mac, token: panelToken(user, mac, epoch)
+            }, function(res) {
+                var now = serverNow(res.json);
+                if (now > 0) {
+                    var diff = now - Math.floor(Date.now() / 1000);
+                    clockOffset = Math.abs(diff) > 120 ? diff : 0;
+                }
+                next(res, now);
+            });
+        }
+        call(0, function(res, now) {
+            var ui = res.json && res.json.user_info;
+            if (ui && String(ui.message) === SECURITY_FAILED && now > 0) {
+                call(now, function(res2) { cb(interpretLogin(res2)); });
+                return;
+            }
+            cb(interpretLogin(res));
+        });
+    }
+
+    function interpretLogin(r) {
+        // Lo que respondio el panel, para el reporte de errores (primeros 1500 caracteres).
+        var detail = 'HTTP ' + r.code + '\nRespuesta: ' + String(r.body || '').slice(0, 1500);
+        if (r.code <= 0) return { status: 'error', message: 'Error de red: revisa tu conexión', detail: detail };
+        if (r.code !== 200) return { status: 'error', message: 'Error del servidor: ' + r.code, detail: detail };
+        var ui = r.json && r.json.user_info;
+        if (!ui || typeof ui !== 'object') return { status: 'error', message: 'Respuesta de servidor inválida', detail: detail };
+        var st = String(ui.status || '');
+        if (String(ui.auth) === '1' && st !== 'Expired' && st !== 'Banned' && st !== 'Disabled') {
+            return { status: 'ok', message: '', expDate: String(ui.exp_date || '') };
+        }
+        var msg = String(ui.message || '');
+        if (msg === '' || msg === 'Invalid login' || msg === 'Login failed or Expired') msg = 'Usuario o contraseña incorrectos';
+        else if (msg === 'Expired') msg = 'Cuenta vencida: contacta a tu proveedor para renovar';
+        return { status: 'denied', message: msg };
+    }
+
+    // --- ESTILOS ---
+    // La pantalla se dibuja en 1920x1080, como la de Roku, y se escala a la TV (layout()).
     function injectStyles() {
         if (document.getElementById('ytmod-auth-styles')) return;
         var style = document.createElement('style');
         style.id = 'ytmod-auth-styles';
         style.textContent = `
-            /* INFRANQUEABLE LOCK: HIDE EVERYTHING IN YOUTUBE WHILE LOCKED */
+            /* BLOQUEO: NADA DE YOUTUBE SE VE NI SUENA HASTA QUE EL PANEL ACEPTA EL USUARIO */
             html.ytmod-locked body > *:not(#ytmod-auth-screen):not(#ytmod-auth-styles) {
                 display: none !important;
                 visibility: hidden !important;
@@ -233,761 +330,779 @@
             }
 
             /* HIDE OBTENER PREMIUM / GET PREMIUM SYSTEMWIDE */
-            [aria-label*="Premium" i]:not(.ytmod-badge),
+            [aria-label*="Premium" i],
             [title*="Premium" i],
             yt-button-renderer[data-yt-premium],
             .yt-spec-button-shape-next--mono[aria-label*="Premium" i] {
                 display: none !important;
             }
 
-            /* AUTH SCREEN FULLSCREEN CONTAINER */
-            #ytmod-auth-screen {
+            #ytmod-auth-screen, #ytmod-dialog {
                 position: fixed !important;
-                inset: 0 !important;
+                left: 0 !important;
+                top: 0 !important;
                 width: 100vw !important;
                 height: 100vh !important;
                 z-index: 2147483647 !important;
-                background-color: #080a0f !important;
-                background-image: url('${BG_IMAGE_URL}') !important;
-                background-size: cover !important;
-                background-position: center right !important;
-                background-repeat: no-repeat !important;
-                display: flex !important;
-                align-items: center !important;
-                justify-content: flex-start !important;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif !important;
                 overflow: hidden !important;
-                transition: opacity 0.5s ease !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                font-family: Roboto, "YouTube Sans", "Helvetica Neue", Arial, sans-serif !important;
+                -webkit-font-smoothing: antialiased;
             }
-            #ytmod-auth-screen::before {
-                content: '' !important;
-                position: absolute !important;
-                inset: 0 !important;
-                background: linear-gradient(to right, rgba(8,11,18,0.98) 0%, rgba(8,11,18,0.92) 45%, rgba(8,11,18,0.4) 75%, transparent 100%) !important;
-                z-index: 1 !important;
+            #ytmod-auth-screen {
+                display: block;
+                background: #05030a !important;
+                transition: opacity 0.4s ease !important;
             }
-            .ytmod-content-box {
-                position: relative !important;
-                z-index: 10 !important;
-                margin-left: 6vw !important;
-                width: 480px !important;
-                max-width: 88vw !important;
-                display: flex !important;
-                flex-direction: column !important;
-            }
-            .ytmod-badge {
-                background: rgba(225, 29, 72, 0.2) !important;
-                border: 1px solid rgba(225, 29, 72, 0.5) !important;
-                color: #ff476d !important;
-                font-size: 13px !important;
-                font-weight: 700 !important;
-                text-transform: uppercase !important;
-                letter-spacing: 1.2px !important;
-                padding: 6px 16px !important;
-                border-radius: 50px !important;
-                width: fit-content !important;
-                margin-bottom: 14px !important;
-                display: flex !important;
-                align-items: center !important;
-                gap: 8px !important;
-            }
-            .ytmod-title {
-                color: #ffffff !important;
-                font-size: 32px !important;
-                font-weight: 800 !important;
-                line-height: 1.2 !important;
-                margin: 0 0 10px 0 !important;
-                text-shadow: 0 4px 18px rgba(0,0,0,0.8) !important;
-            }
-            .ytmod-subtitle {
-                color: #94a3b8 !important;
-                font-size: 15px !important;
-                line-height: 1.4 !important;
-                margin: 0 0 24px 0 !important;
-                text-shadow: 0 2px 10px rgba(0,0,0,0.8) !important;
-            }
-            .ytmod-card {
-                background: rgba(18, 24, 38, 0.75) !important;
-                border: 1px solid rgba(255, 255, 255, 0.12) !important;
-                backdrop-filter: blur(16px) !important;
-                -webkit-backdrop-filter: blur(16px) !important;
-                border-radius: 18px !important;
-                padding: 26px !important;
-                box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6) !important;
-            }
-            .ytmod-input-group {
-                margin-bottom: 16px !important;
-                display: flex !important;
-                flex-direction: column !important;
-                gap: 6px !important;
-            }
-            .ytmod-input-group label {
-                color: #cbd5e1 !important;
-                font-size: 13px !important;
-                font-weight: 600 !important;
-            }
-            .ytmod-input {
-                background: rgba(10, 14, 23, 0.8) !important;
-                border: 2px solid rgba(255, 255, 255, 0.1) !important;
-                color: #ffffff !important;
-                font-size: 16px !important;
-                padding: 12px 14px !important;
-                border-radius: 10px !important;
-                outline: none !important;
-                transition: all 0.2s ease !important;
-            }
-            .ytmod-input:focus {
-                border-color: #ff0033 !important;
-                background: rgba(15, 23, 42, 0.95) !important;
-                box-shadow: 0 0 0 3px rgba(255, 0, 51, 0.35) !important;
-                transform: scale(1.02) !important;
-            }
-            .ytmod-btn-login {
-                width: 100% !important;
-                background: linear-gradient(135deg, #e11d48 0%, #be123c 100%) !important;
-                border: 2px solid transparent !important;
-                color: #ffffff !important;
-                font-size: 16px !important;
-                font-weight: 700 !important;
-                padding: 14px !important;
-                border-radius: 10px !important;
-                cursor: pointer !important;
-                margin-top: 10px !important;
-                outline: none !important;
-                transition: all 0.2s ease !important;
-                box-shadow: 0 4px 15px rgba(225, 29, 72, 0.4) !important;
-            }
-            .ytmod-btn-login:focus {
-                border-color: #ffffff !important;
-                background: linear-gradient(135deg, #f43f5e 0%, #e11d48 100%) !important;
-                transform: scale(1.03) !important;
-                box-shadow: 0 0 0 4px rgba(255, 255, 255, 0.5), 0 8px 25px rgba(225, 29, 72, 0.6) !important;
-            }
-            .ytmod-error-box {
-                background: rgba(239, 68, 68, 0.15) !important;
-                border: 1px solid rgba(239, 68, 68, 0.4) !important;
-                color: #fca5a5 !important;
-                font-size: 13px !important;
-                padding: 10px 14px !important;
-                border-radius: 8px !important;
-                margin-bottom: 14px !important;
+            #ytmod-dialog {
                 display: none;
+                background: rgba(0, 0, 0, 0.6) !important;
+            }
+            .ytm-stage {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 1920px;
+                height: 1080px;
+                transform-origin: 0 0;
+                box-sizing: border-box;
+            }
+            .ytm-stage * {
+                box-sizing: border-box;
+                margin: 0;
+                padding: 0;
+                line-height: 1.2;
+                letter-spacing: 0;
+            }
+            #ytmod-auth-screen .ytm-stage {
+                background: #05030a url('${BG_IMAGE_URL}') center / cover no-repeat;
+            }
+            .ytm-box {
+                position: absolute;
+                left: 110px;
+                top: 90px;
+                width: 680px;
+                height: 900px;
+                background: rgba(10, 6, 20, 0.55);
+            }
+            .ytm-accent {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                height: 4px;
+                background: #FF2E88;
+            }
+            .ytm-logo {
+                position: absolute;
+                left: 50px;
+                top: 44px;
+                width: 72px;
+                height: 72px;
+                border-radius: 12px;
+            }
+            .ytm-brand {
+                position: absolute;
+                left: 138px;
+                top: 58px;
+                color: rgba(255, 255, 255, 0.8);
+                font-size: 36px;
+                font-weight: 500;
+            }
+            .ytm-headline {
+                position: absolute;
+                left: 50px;
+                top: 170px;
+                width: 580px;
+                color: #FFFFFF;
+                font-size: 45px;
+                font-weight: 500;
+            }
+            .ytm-noads {
+                position: absolute;
+                left: 50px;
+                top: 248px;
+                color: #FF2E88;
+                font-size: 36px;
+                font-weight: 700;
+            }
+            .ytm-bar {
+                position: absolute;
+                left: 50px;
+                top: 306px;
+                width: 90px;
+                height: 6px;
+                background: #FF2E88;
+            }
+            .ytm-field {
+                position: absolute;
+                left: 50px;
+                width: 580px;
+                height: 90px;
+                background: rgba(255, 255, 255, 0.10);
+            }
+            #ytm-field-user {
+                top: 400px;
+            }
+            #ytm-field-pass {
+                top: 520px;
+            }
+            .ytm-field.ytm-focused {
+                background: rgba(255, 255, 255, 0.25);
+            }
+            .ytm-field-label {
+                position: absolute;
+                left: 25px;
+                top: 8px;
+                color: #BBBBBB;
+                font-size: 27px;
+            }
+            #ytmod-auth-screen .ytm-input {
+                position: absolute !important;
+                left: 25px !important;
+                top: 36px !important;
+                width: 530px !important;
+                height: 48px !important;
+                margin: 0 !important;
+                padding: 0 !important;
+                border: 0 !important;
+                outline: none !important;
+                background: transparent !important;
+                box-shadow: none !important;
+                color: #FFFFFF !important;
+                font-family: inherit !important;
+                font-size: 36px !important;
+                line-height: 48px !important;
+                caret-color: #FF2E88;
+            }
+            #ytmod-auth-screen .ytm-input::placeholder {
+                color: #9A9AB0 !important;
+                opacity: 1 !important;
+            }
+            .ytm-field-line {
+                position: absolute;
+                left: 0;
+                top: 86px;
+                width: 100%;
+                height: 4px;
+                background: #FF2E88;
+                display: none;
+            }
+            .ytm-field.ytm-focused .ytm-field-line {
+                display: block;
+            }
+            .ytm-enter {
+                position: absolute;
+                left: 50px;
+                top: 650px;
+                width: 580px;
+                height: 90px;
+                line-height: 90px !important;
+                background: #A80D48;
+                color: #FFFFFF;
+                font-size: 36px;
+                font-weight: 700;
+                text-align: center;
+            }
+            .ytm-enter.ytm-focused {
+                background: #FF2E88;
+            }
+            .ytm-status {
+                position: absolute;
+                left: 50px;
+                top: 760px;
+                width: 580px;
+                height: 80px;
+                overflow: hidden;
+                color: #FF6B6B;
+                font-size: 30px;
+                text-align: center;
+            }
+            .ytm-status.ytm-ok {
+                color: #9BE89B;
+            }
+            .ytm-device {
+                position: absolute;
+                left: 0;
+                top: 852px;
+                width: 680px;
+                color: #9A9AB0;
+                font-size: 27px;
+                text-align: center;
             }
 
-            /* FLOATING AUTH & UPDATE MODALS */
-            #ytmod-auth-modal, #ytmod-update-modal {
-                position: fixed !important;
-                inset: 0 !important;
-                z-index: 2147483647 !important;
-                background: rgba(5, 7, 12, 0.85) !important;
-                backdrop-filter: blur(12px) !important;
-                -webkit-backdrop-filter: blur(12px) !important;
-                display: none;
-                align-items: center !important;
-                justify-content: center !important;
+            /* AVISOS (vencimiento, actualizacion): la misma caja que el login */
+            .ytm-dialog-box {
+                position: absolute;
+                left: 460px;
+                top: 240px;
+                width: 1000px;
+                padding: 60px 70px 50px 70px;
+                background: rgba(16, 8, 30, 0.96);
+                box-shadow: 0 30px 80px rgba(0, 0, 0, 0.7);
             }
-            .ytmod-modal-box {
-                background: #0f172a !important;
-                border: 1px solid rgba(255, 255, 255, 0.15) !important;
-                border-radius: 20px !important;
-                padding: 34px !important;
-                width: 440px !important;
-                max-width: 90vw !important;
-                text-align: center !important;
-                box-shadow: 0 20px 50px rgba(0, 0, 0, 0.8) !important;
+            .ytm-dialog-title {
+                color: #FFFFFF;
+                font-size: 45px;
+                font-weight: 700;
+                margin-bottom: 26px !important;
             }
-            .ytmod-modal-header {
-                display: flex !important;
-                align-items: center !important;
-                justify-content: center !important;
-                gap: 12px !important;
-                margin-bottom: 22px !important;
+            .ytm-dialog-text {
+                color: #D8D8E6;
+                font-size: 30px;
+                line-height: 1.35 !important;
+                white-space: pre-line;
+                max-height: 330px;
+                overflow: hidden;
             }
-            .ytmod-modal-header h2 {
-                color: #ffffff !important;
-                font-size: 22px !important;
-                font-weight: 700 !important;
-                margin: 0 !important;
+            .ytm-dialog-buttons {
+                margin-top: 44px !important;
+                display: flex;
+                gap: 30px;
             }
-            .ytmod-spinner {
-                width: 50px !important;
-                height: 50px !important;
-                border: 4px solid rgba(225, 29, 72, 0.2) !important;
-                border-top: 4px solid #e11d48 !important;
-                border-radius: 50% !important;
-                margin: 0 auto 20px auto !important;
-                animation: ytmod-spin 0.8s linear infinite !important;
+            .ytm-dialog-button {
+                min-width: 300px;
+                height: 80px;
+                line-height: 80px !important;
+                padding: 0 40px !important;
+                background: rgba(255, 255, 255, 0.10);
+                color: #FFFFFF;
+                font-size: 32px;
+                font-weight: 700;
+                text-align: center;
             }
-            @keyframes ytmod-spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
-            }
-            .ytmod-success-icon {
-                display: none;
-                width: 60px !important;
-                height: 60px !important;
-                background: rgba(16, 185, 129, 0.2) !important;
-                border: 2px solid #10b981 !important;
-                border-radius: 50% !important;
-                margin: 0 auto 16px auto !important;
-                align-items: center !important;
-                justify-content: center !important;
-                box-shadow: 0 0 25px rgba(16, 185, 129, 0.4) !important;
-            }
-            .ytmod-error-icon {
-                display: none;
-                width: 60px !important;
-                height: 60px !important;
-                background: rgba(239, 68, 68, 0.2) !important;
-                border: 2px solid #ef4444 !important;
-                border-radius: 50% !important;
-                margin: 0 auto 16px auto !important;
-                align-items: center !important;
-                justify-content: center !important;
-            }
-            .ytmod-status-text {
-                color: #ffffff !important;
-                font-size: 18px !important;
-                font-weight: 700 !important;
-                margin-bottom: 6px !important;
-            }
-            .ytmod-substatus-text {
-                color: #94a3b8 !important;
-                font-size: 14px !important;
-            }
-            .ytmod-btn-retry {
-                display: none;
-                background: #334155 !important;
-                color: #ffffff !important;
-                border: 2px solid transparent !important;
-                padding: 10px 24px !important;
-                border-radius: 8px !important;
-                font-size: 15px !important;
-                font-weight: 600 !important;
-                margin-top: 18px !important;
-                cursor: pointer !important;
-                outline: none !important;
-            }
-            .ytmod-btn-retry:focus {
-                border-color: #fff !important;
-                background: #475569 !important;
-                transform: scale(1.05) !important;
-            }
-            .ytmod-progress-bar-container {
-                width: 100% !important;
-                height: 12px !important;
-                background: #1e293b !important;
-                border-radius: 10px !important;
-                overflow: hidden !important;
-                margin: 16px 0 8px 0 !important;
-            }
-            .ytmod-progress-fill {
-                width: 0%;
-                height: 100% !important;
-                background: linear-gradient(90deg, #e11d48, #f43f5e) !important;
-                transition: width 0.3s ease !important;
+            .ytm-dialog-button.ytm-focused {
+                background: #FF2E88;
             }
         `;
         (document.head || document.documentElement).appendChild(style);
     }
 
-    // --- CREATE AND MOUNT AUTH SCREEN ---
+    // Escala el lienzo de 1920x1080 a la pantalla, centrado.
+    function layout() {
+        var w = window.innerWidth || 1920;
+        var h = window.innerHeight || 1080;
+        var s = Math.min(w / 1920, h / 1080);
+        var stages = document.querySelectorAll('.ytm-stage');
+        for (var i = 0; i < stages.length; i++) {
+            stages[i].style.transform = 'scale(' + s + ')';
+            stages[i].style.left = Math.round((w - 1920 * s) / 2) + 'px';
+            stages[i].style.top = Math.round((h - 1080 * s) / 2) + 'px';
+        }
+    }
+    window.addEventListener('resize', layout);
+
+    // --- PANTALLA DE LOGIN ---
+    function el(id) {
+        return document.getElementById(id);
+    }
+
     function createAuthScreen() {
         injectStyles();
-        document.documentElement.classList.add('ytmod-locked');
-
-        if (document.getElementById('ytmod-auth-screen')) return;
+        if (!isAuthGranted) document.documentElement.classList.add('ytmod-locked');
+        if (el('ytmod-auth-screen')) return;
 
         var screen = document.createElement('div');
         screen.id = 'ytmod-auth-screen';
         screen.innerHTML = `
-            <div class="ytmod-content-box">
-                <div class="ytmod-badge">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="#ff476d"><path d="M12 2L1 21h22L12 2zm0 3.99L19.53 19H4.47L12 5.99zM11 10h2v4h-2zm0 6h2v2h-2z"/></svg>
-                    YOUTUBE PREMIUM
-                </div>
-                <h1 class="ytmod-title">Sin anuncios. Todo tu contenido favorito, m&uacute;sica y videos, en un solo lugar.</h1>
-                <p class="ytmod-subtitle">Acceso seguro con bloqueo de publicidad, reproducci&oacute;n en segundo plano y m&aacute;xima resoluci&oacute;n.</p>
-                <div class="ytmod-card">
-                    <div id="ytmod-error-msg" class="ytmod-error-box"></div>
-                    <div class="ytmod-input-group">
-                        <label for="ytmod-username-input">Usuario</label>
-                        <input id="ytmod-username-input" class="ytmod-input" type="text" placeholder="Ingresa tu usuario" autocomplete="username" tabindex="1" />
-                    </div>
-                    <div class="ytmod-input-group">
-                        <label for="ytmod-password-input">Contrase&ntilde;a</label>
-                        <input id="ytmod-password-input" class="ytmod-input" type="password" placeholder="Ingresa tu contrase&ntilde;a" autocomplete="current-password" tabindex="2" />
-                    </div>
-                    <button id="ytmod-login-btn" class="ytmod-btn-login" tabindex="3">Iniciar Sesi&oacute;n</button>
-                </div>
-            </div>
+            <div class="ytm-stage">
+                <div class="ytm-box">
+                    <div class="ytm-accent"></div>
+                    <img class="ytm-logo" src="${LOGO_URL}" alt="">
+                    <div class="ytm-brand">${BRAND_NAME}</div>
+                    <div class="ytm-headline">Todo tu contenido favorito</div>
+                    <div class="ytm-noads">Sin Anuncios</div>
+                    <div class="ytm-bar"></div>
 
-            <!-- MODAL DE ANIMACION PROFESIONAL -->
-            <div id="ytmod-auth-modal">
-                <div class="ytmod-modal-box">
-                    <div class="ytmod-modal-header">
-                        <svg width="34" height="34" viewBox="0 0 24 24" fill="#e11d48"><path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/></svg>
-                        <h2>YouTube Premium</h2>
+                    <div id="ytm-field-user" class="ytm-field">
+                        <div class="ytm-field-label">Usuario</div>
+                        <input id="ytmod-username-input" class="ytm-input" type="text" placeholder="Escribe tu usuario"
+                            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                        <div class="ytm-field-line"></div>
                     </div>
-                    <div id="ytmod-modal-spinner" class="ytmod-spinner"></div>
-                    <div id="ytmod-modal-success" class="ytmod-success-icon">
-                        <svg width="36" height="36" viewBox="0 0 24 24" fill="#10b981"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                    <div id="ytm-field-pass" class="ytm-field">
+                        <div class="ytm-field-label">Contraseña</div>
+                        <input id="ytmod-password-input" class="ytm-input" type="password" placeholder="Escribe tu contraseña"
+                            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
+                        <div class="ytm-field-line"></div>
                     </div>
-                    <div id="ytmod-modal-error" class="ytmod-error-icon">
-                        <svg width="36" height="36" viewBox="0 0 24 24" fill="#e11d48"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
-                    </div>
-                    <div id="ytmod-modal-status" class="ytmod-status-text">Autenticando usuario...</div>
-                    <div id="ytmod-modal-substatus" class="ytmod-substatus-text">Validando credenciales en el servidor</div>
-                    <button id="ytmod-modal-retry-btn" class="ytmod-btn-retry" tabindex="4">Reintentar</button>
-                </div>
-            </div>
+                    <div id="ytm-enter" class="ytm-enter">ENTRAR</div>
 
-            <!-- MODAL DE ACTUALIZACION TV -->
-            <div id="ytmod-update-modal">
-                <div class="ytmod-modal-box">
-                    <div class="ytmod-badge" style="margin: 0 auto 12px auto;">NUEVA ACTUALIZACION TV</div>
-                    <h2 id="ytmod-update-title" style="color: #fff; font-size: 22px; margin-bottom: 12px;">Version disponible</h2>
-                    <p id="ytmod-update-notes" style="color: #94a3b8; font-size: 14px; margin-bottom: 18px; max-height: 120px; overflow-y: auto; text-align: left; background: rgba(0,0,0,0.3); padding: 10px; border-radius: 8px;"></p>
-                    
-                    <div id="ytmod-update-progress-area" style="display: none;">
-                        <div class="ytmod-progress-bar-container">
-                            <div id="ytmod-progress-fill" class="ytmod-progress-fill"></div>
-                        </div>
-                        <div id="ytmod-progress-text" style="color: #fff; font-size: 14px; font-weight: 600;">Descargando: 0%</div>
-                    </div>
-
-                    <div id="ytmod-update-buttons" style="display: flex; gap: 10px; margin-top: 15px; justify-content: center;">
-                        <button id="ytmod-btn-update-now" class="ytmod-btn-login" style="margin:0; width: auto; padding: 12px 28px;" tabindex="5">Actualizar Ahora</button>
-                        <button id="ytmod-btn-update-later" class="ytmod-btn-retry" style="display: inline-block; margin:0;" tabindex="6">Mas Tarde</button>
-                    </div>
+                    <div id="ytm-status" class="ytm-status"></div>
+                    <div id="ytm-device" class="ytm-device"></div>
                 </div>
             </div>
         `;
-
         (document.body || document.documentElement).appendChild(screen);
+        if (isAuthGranted) screen.style.display = 'none';
 
-        var savedUser = localStorage.getItem('ytmod_user');
-        if (savedUser) {
-            var uInp = document.getElementById('ytmod-username-input');
-            if (uInp) uInp.value = savedUser;
-        }
+        el('ytm-device').textContent = 'ID del dispositivo: ' + deviceId();
+        el('ytmod-username-input').value = store('ytmod_user');
 
-        // Bind click events
-        var loginBtn = document.getElementById('ytmod-login-btn');
-        if (loginBtn) loginBtn.addEventListener('click', handleManualLogin);
+        // Si el teclado de Android pasa solo al otro campo ("Siguiente"), el foco lo sigue.
+        el('ytmod-username-input').addEventListener('focus', function() { focusIndex = 0; render(); });
+        el('ytmod-password-input').addEventListener('focus', function() { focusIndex = 1; render(); });
 
-        var retryBtn = document.getElementById('ytmod-modal-retry-btn');
-        if (retryBtn) {
-            retryBtn.addEventListener('click', function() {
-                hideAuthModal();
-                var uInp = document.getElementById('ytmod-username-input');
-                if (uInp) uInp.focus();
-            });
-        }
+        // Con mouse o pantalla tactil tambien funciona.
+        el('ytm-field-user').addEventListener('click', function() { focusIndex = 0; render(); openField(); });
+        el('ytm-field-pass').addEventListener('click', function() { focusIndex = 1; render(); openField(); });
+        el('ytm-enter').addEventListener('click', function() { focusIndex = 2; render(); submit(); });
 
-        // Focus user input after mount
-        setTimeout(function() {
-            var uInp = document.getElementById('ytmod-username-input');
-            if (uInp) uInp.focus();
-        }, 150);
+        layout();
+        render();
     }
 
-    // --- TV REMOTE (D-PAD) EVENT INTERCEPTOR (CAPTURE PHASE) ---
-    window.addEventListener('keydown', function(e) {
-        if (isAuthGranted) return;
+    function inputs() {
+        return [el('ytmod-username-input'), el('ytmod-password-input')];
+    }
 
-        // Stop ALL key events from reaching YouTube in background!
-        e.stopImmediatePropagation();
-        e.stopPropagation();
+    // El campo con el foco se aclara y lleva la linea rosa; ENTRAR se enciende.
+    function render() {
+        var user = el('ytm-field-user'), pass = el('ytm-field-pass'), enter = el('ytm-enter'), status = el('ytm-status');
+        if (!user) return;
+        user.classList.toggle('ytm-focused', focusIndex === 0);
+        pass.classList.toggle('ytm-focused', focusIndex === 1);
+        enter.classList.toggle('ytm-focused', focusIndex === 2);
+        status.textContent = statusText;
+        status.classList.toggle('ytm-ok', statusOk);
+    }
 
-        var activeEl = document.activeElement;
-        var userInp = document.getElementById('ytmod-username-input');
-        var passInp = document.getElementById('ytmod-password-input');
-        var loginBtn = document.getElementById('ytmod-login-btn');
-        var retryBtn = document.getElementById('ytmod-modal-retry-btn');
-        var modal = document.getElementById('ytmod-auth-modal');
+    function showStatus(text, ok) {
+        statusText = text || '';
+        statusOk = !!ok;
+        render();
+    }
 
-        var isModalVisible = modal && modal.style.display === 'flex';
+    // OK en un campo: el teclado de Android TV se abre al darle el foco al campo.
+    function openField() {
+        var input = inputs()[focusIndex];
+        if (input) input.focus();
+    }
 
-        if (isModalVisible) {
-            if (retryBtn && (e.key === 'Enter' || e.keyCode === 13)) {
-                e.preventDefault();
-                retryBtn.click();
-            }
+    function closeKeyboard() {
+        var list = inputs();
+        for (var i = 0; i < list.length; i++) {
+            if (list[i] && document.activeElement === list[i]) list[i].blur();
+        }
+    }
+
+    function submit() {
+        if (busy) return;
+        var list = inputs();
+        var user = (list[0] ? list[0].value : '').trim();
+        var pass = (list[1] ? list[1].value : '').trim();
+        if (!user || !pass) {
+            showStatus('Por favor, complete los campos', false);
             return;
         }
-
-        // TV Remote Navigation
-        if (e.key === 'ArrowDown' || e.keyCode === 40) {
-            e.preventDefault();
-            if (activeEl === userInp) passInp.focus();
-            else if (activeEl === passInp) loginBtn.focus();
-            else if (activeEl === loginBtn) userInp.focus();
-            else userInp.focus();
-        } else if (e.key === 'ArrowUp' || e.keyCode === 38) {
-            e.preventDefault();
-            if (activeEl === loginBtn) passInp.focus();
-            else if (activeEl === passInp) userInp.focus();
-            else if (activeEl === userInp) loginBtn.focus();
-            else userInp.focus();
-        } else if (e.key === 'Enter' || e.keyCode === 13) {
-            e.preventDefault();
-            if (activeEl === userInp) {
-                passInp.focus();
-            } else {
-                handleManualLogin();
+        closeKeyboard();
+        busy = true;
+        showStatus('Verificando con el panel…', true);
+        panelLogin(user, pass, function(result) {
+            if (result.status === 'ok') {
+                store('ytmod_user', user);
+                store('ytmod_pass', pass);
+                store('ytmod_logged_in', '1');
+                store('ytmod_exp_date', result.expDate);
+                store('ytmod_sync_ts', Math.floor(Date.now() / 1000));
+                showStatus('Acceso concedido', true);
+                setTimeout(function() {
+                    busy = false;
+                    unlockScreen();
+                    afterLogin(user);
+                }, 700);
+                return;
             }
-        } else if (e.key === 'Back' || e.key === 'Escape' || e.keyCode === 27 || e.keyCode === 10009 || e.keyCode === 461) {
-            e.preventDefault();
-        }
-    }, true);
-
-    // --- MODAL ANIMATION HELPERS ---
-    function showAuthModal(statusText, substatusText) {
-        var modal = document.getElementById('ytmod-auth-modal');
-        var spinner = document.getElementById('ytmod-modal-spinner');
-        var success = document.getElementById('ytmod-modal-success');
-        var error = document.getElementById('ytmod-modal-error');
-        var status = document.getElementById('ytmod-modal-status');
-        var substatus = document.getElementById('ytmod-modal-substatus');
-        var retryBtn = document.getElementById('ytmod-modal-retry-btn');
-
-        if (!modal) return;
-        spinner.style.display = 'block';
-        success.style.display = 'none';
-        error.style.display = 'none';
-        retryBtn.style.display = 'none';
-
-        status.textContent = statusText || 'Autenticando usuario...';
-        substatus.textContent = substatusText || 'Validando credenciales en el servidor';
-        modal.style.display = 'flex';
+            busy = false;
+            if (result.status === 'denied') store('ytmod_logged_in', '0');
+            showStatus(result.message, false);
+            // Una contrasena mala no es un error; la red o el servidor si (como LOGIN_RED en iOS).
+            if (result.status === 'error') {
+                var tipo = /^Error de red/.test(result.message) ? 'LOGIN_RED' : 'LOGIN_RESPUESTA';
+                reportError(tipo, result.message, 'Usuario escrito: ' + user + '\n' + (result.detail || ''));
+            }
+        });
     }
 
-    function setModalSuccess(title, message, callback) {
-        var spinner = document.getElementById('ytmod-modal-spinner');
-        var success = document.getElementById('ytmod-modal-success');
-        var status = document.getElementById('ytmod-modal-status');
-        var substatus = document.getElementById('ytmod-modal-substatus');
-
-        if (spinner) spinner.style.display = 'none';
-        if (success) success.style.display = 'flex';
-        if (status) status.textContent = title;
-        if (substatus) substatus.textContent = message;
-
-        setTimeout(function() {
-            hideAuthModal();
-            unlockScreen();
-            if (callback) callback();
-        }, 1400);
-    }
-
-    function setModalError(title, message) {
-        var spinner = document.getElementById('ytmod-modal-spinner');
-        var error = document.getElementById('ytmod-modal-error');
-        var status = document.getElementById('ytmod-modal-status');
-        var substatus = document.getElementById('ytmod-modal-substatus');
-        var retryBtn = document.getElementById('ytmod-modal-retry-btn');
-
-        if (spinner) spinner.style.display = 'none';
-        if (error) error.style.display = 'flex';
-        if (status) status.textContent = title;
-        if (substatus) substatus.textContent = message;
-        if (retryBtn) {
-            retryBtn.style.display = 'inline-block';
-            retryBtn.focus();
+    // Los videos de fondo quedan en pausa y en silencio; al entrar, solo vuelven a sonar los que
+    // se silenciaron aqui (las vistas previas de YouTube siguen como estaban).
+    function pauseVideos() {
+        var vids = document.getElementsByTagName('video');
+        for (var i = 0; i < vids.length; i++) {
+            try {
+                vids[i].pause();
+                if (!vids[i].muted) {
+                    vids[i].muted = true;
+                    vids[i].setAttribute('data-ytmod-muted', '1');
+                }
+            } catch (e) {}
         }
     }
 
-    function hideAuthModal() {
-        var modal = document.getElementById('ytmod-auth-modal');
-        if (modal) modal.style.display = 'none';
+    function restoreVideos() {
+        var vids = document.querySelectorAll('video[data-ytmod-muted]');
+        for (var i = 0; i < vids.length; i++) {
+            vids[i].removeAttribute('data-ytmod-muted');
+            vids[i].muted = false;
+        }
     }
 
     function unlockScreen() {
         isAuthGranted = true;
+        closeKeyboard();
         document.documentElement.classList.remove('ytmod-locked');
-        var screen = document.getElementById('ytmod-auth-screen');
+        restoreVideos();
+        var screen = el('ytmod-auth-screen');
         if (screen) {
             screen.style.opacity = '0';
             setTimeout(function() {
-                screen.style.display = 'none';
-            }, 500);
+                if (isAuthGranted) screen.style.display = 'none';
+            }, 400);
         }
     }
 
-    function lockScreen(errorMessage) {
+    // Vuelve al login (sesion rechazada por el panel): el usuario queda escrito, la contrasena no.
+    function lockScreen(message) {
         isAuthGranted = false;
+        busy = false;
+        closeDialogs();
+        createAuthScreen();
         document.documentElement.classList.add('ytmod-locked');
-        var screen = document.getElementById('ytmod-auth-screen');
-        if (screen) {
-            screen.style.display = 'flex';
-            screen.style.opacity = '1';
-        }
-        if (errorMessage) {
-            var errBox = document.getElementById('ytmod-error-msg');
-            if (errBox) {
-                errBox.textContent = errorMessage;
-                errBox.style.display = 'block';
-            }
-        }
-        // Force pause videos
-        var vids = document.getElementsByTagName('video');
-        for (var i = 0; i < vids.length; i++) {
-            vids[i].pause();
-            vids[i].muted = true;
+        var screen = el('ytmod-auth-screen');
+        screen.style.display = 'block';
+        screen.style.opacity = '1';
+        var list = inputs();
+        list[0].value = store('ytmod_user');
+        list[1].value = '';
+        focusIndex = list[0].value ? 1 : 0;
+        showStatus(message || '', false);
+        pauseVideos();
+    }
+
+    // Al abrir la app: la caja de login siempre se ve primero. Con una sesion guardada el panel
+    // tiene que aceptarla otra vez (se valida sola, con el foco en ENTRAR).
+    function startLogin() {
+        createAuthScreen();
+        var user = store('ytmod_user');
+        var pass = store('ytmod_pass');
+        var list = inputs();
+        list[0].value = user;
+        if (user && pass && store('ytmod_logged_in') !== '0') {
+            list[1].value = pass;
+            focusIndex = 2;
+            render();
+            submit();
+        } else {
+            focusIndex = user ? 1 : 0;
+            render();
         }
     }
 
-    // --- MANUAL LOGIN HANDLER ---
-    function handleManualLogin() {
-        var uEl = document.getElementById('ytmod-username-input');
-        var pEl = document.getElementById('ytmod-password-input');
-        var errBox = document.getElementById('ytmod-error-msg');
+    // --- MANDO DE LA TV (fase de captura: YouTube no recibe nada mientras hay login o aviso) ---
+    var KEY_UP = 38, KEY_DOWN = 40, KEY_LEFT = 37, KEY_RIGHT = 39, KEY_ENTER = 13;
+    function isBack(e) {
+        return e.keyCode === 27 || e.keyCode === 8 && !isTyping() || e.keyCode === 10009 || e.keyCode === 461 ||
+            e.key === 'Escape' || e.key === 'GoBack' || e.key === 'BrowserBack';
+    }
+    function isTyping() {
+        var a = document.activeElement;
+        return !!a && (a.id === 'ytmod-username-input' || a.id === 'ytmod-password-input');
+    }
 
-        var user = (uEl ? uEl.value : '').trim();
-        var pass = (pEl ? pEl.value : '').trim();
-
-        if (!user || !pass) {
-            if (errBox) {
-                errBox.textContent = 'Por favor ingresa usuario y contrasena.';
-                errBox.style.display = 'block';
-            }
-            return;
-        }
-        if (errBox) errBox.style.display = 'none';
-
-        var mac = getDeviceMac();
-        var token = generateToken(user, mac);
-
-        showAuthModal('Chequeando login...', 'Validando usuario y contrase\u00f1a');
-
-        sendApiRequest('player_api.php', {
-            username: user,
-            password: pass,
-            mac: mac,
-            token: token
-        }, function(err, data) {
-            if (err) {
-                setModalError('Error de Conexion', 'No se pudo conectar con el servidor.');
+    // Atras en el login sale de la app, como en Roku.
+    function exitApp() {
+        try {
+            if (window.h5vcc && window.h5vcc.system && window.h5vcc.system.exit) {
+                window.h5vcc.system.exit();
                 return;
             }
+        } catch (e) {}
+        try { window.close(); } catch (e) {}
+    }
 
-            // player_api.php devuelve auth/message/exp_date dentro de user_info.
-            var userInfo = data && data.user_info ? data.user_info : {};
-            var authOk = data && (Number(userInfo.auth) === 1 || Number(data.auth) === 1 ||
-                                  userInfo.status === 'Active' || data.status === 'success');
-            if (authOk) {
-                var expDate = userInfo.exp_date || data.exp_date;
-                var expTs = 0;
-                if (expDate) {
-                    expTs = Number(expDate);
-                    if (isNaN(expTs) || expTs < 100000) {
-                        expTs = Math.floor(new Date(expDate).getTime() / 1000);
-                    }
-                }
-
-                localStorage.setItem('ytmod_user', user);
-                localStorage.setItem('ytmod_pass', pass);
-                localStorage.setItem('ytmod_exp_date', expTs || '');
-
-                var nowTs = Math.floor(Date.now() / 1000);
-                var daysLeft = expTs > nowTs ? Math.floor((expTs - nowTs) / 86400) : 0;
-                var daysMsg = daysLeft > 0 ? (daysLeft + ' dias restantes') : 'Suscripcion activa';
-
-                setModalSuccess('Acceso Concedido!', 'Bienvenido a YouTube Premium (' + daysMsg + ')', function() {
-                    // Show in-app toast if toast helper exists
-                    if (typeof Ro === 'function') {
-                        Ro("YouTube Premium", "Suscripcion activa: " + daysMsg);
-                    }
-                    checkForTvUpdates();
-                });
-            } else {
-                var rawMsg = userInfo.message || userInfo.status || (data && data.message) || (data && data.status) || '';
-                var msg = statusToMessage(rawMsg, 'Usuario o contrasena incorrectos.');
-                setModalError('Acceso Denegado', msg);
+    function onLoginKey(e) {
+        if (busy) {
+            e.preventDefault();
+            return;
+        }
+        var code = e.keyCode;
+        if (code === KEY_UP || code === KEY_DOWN) {
+            e.preventDefault();
+            closeKeyboard();
+            if (code === KEY_UP && focusIndex > 0) focusIndex--;
+            if (code === KEY_DOWN && focusIndex < 2) focusIndex++;
+            render();
+        } else if (code === KEY_ENTER || e.key === 'Enter') {
+            if (focusIndex === 2) {
+                e.preventDefault();
+                submit();
+                return;
             }
+            var input = inputs()[focusIndex];
+            if (document.activeElement !== input) {
+                // Primer OK: el campo toma el foco y se abre el teclado.
+                e.preventDefault();
+                openField();
+            } else if (input.value.trim() !== '') {
+                // "Listo" en el teclado: como Aceptar en Roku, pasa al siguiente.
+                e.preventDefault();
+                closeKeyboard();
+                focusIndex++;
+                render();
+            }
+            // Campo vacio y con foco: el OK sigue su camino normal (vuelve a abrir el teclado).
+        } else if (isBack(e)) {
+            e.preventDefault();
+            if (isTyping()) closeKeyboard();
+            else exitApp();
+        }
+    }
+
+    // Tecla cuyo keydown se quedo aqui: su keyup tampoco llega a YouTube, aunque el login o el
+    // aviso ya se hayan cerrado (si no, el OK que cierra un aviso abriria lo que hay detras).
+    var heldKey = -1;
+    function onKey(e) {
+        if (e.type === 'keyup' && e.keyCode === heldKey) {
+            heldKey = -1;
+            e.stopImmediatePropagation();
+            e.stopPropagation();
+            e.preventDefault();
+            return;
+        }
+        if (isAuthGranted && !dialogOpen()) return;
+        // Nada llega a YouTube mientras hay login o un aviso abierto.
+        e.stopImmediatePropagation();
+        e.stopPropagation();
+        if (e.type !== 'keydown') return;
+        heldKey = e.keyCode;
+        if (!isAuthGranted) onLoginKey(e);
+        else onDialogKey(e);
+    }
+    window.addEventListener('keydown', onKey, true);
+    window.addEventListener('keyup', onKey, true);
+    window.addEventListener('keypress', onKey, true);
+
+    // --- AVISOS: vencimiento y actualizacion (uno a la vez; los demas esperan) ---
+    var dialogQueue = [];
+    var currentDialog = null;
+    var dialogButton = 0;
+
+    function dialogOpen() {
+        return !!currentDialog;
+    }
+
+    // d: {title, text, buttons: [{label, action}], back: funcion de Atras (null = salir de la app)}
+    function showDialog(d) {
+        if (currentDialog) {
+            dialogQueue.push(d);
+            return;
+        }
+        injectStyles();
+        var box = el('ytmod-dialog');
+        if (!box) {
+            box = document.createElement('div');
+            box.id = 'ytmod-dialog';
+            box.innerHTML = '<div class="ytm-stage"><div class="ytm-dialog-box"><div class="ytm-accent"></div>' +
+                '<div id="ytm-dialog-title" class="ytm-dialog-title"></div>' +
+                '<div id="ytm-dialog-text" class="ytm-dialog-text"></div>' +
+                '<div id="ytm-dialog-buttons" class="ytm-dialog-buttons"></div></div></div>';
+            (document.body || document.documentElement).appendChild(box);
+        }
+        currentDialog = d;
+        dialogButton = 0;
+        box.style.display = 'block';
+        layout();
+        renderDialog();
+    }
+
+    function renderDialog() {
+        var d = currentDialog;
+        if (!d) return;
+        el('ytm-dialog-title').textContent = d.title || '';
+        el('ytm-dialog-text').textContent = d.text || '';
+        var area = el('ytm-dialog-buttons');
+        area.innerHTML = '';
+        var buttons = d.buttons || [];
+        if (dialogButton >= buttons.length) dialogButton = 0;
+        buttons.forEach(function(b, i) {
+            var btn = document.createElement('div');
+            btn.className = 'ytm-dialog-button' + (i === dialogButton ? ' ytm-focused' : '');
+            btn.textContent = b.label;
+            btn.addEventListener('click', function() { pressDialogButton(i); });
+            area.appendChild(btn);
         });
     }
 
-    // Traduce el status/mensaje del panel a un texto para el usuario.
-    function statusToMessage(status, fallback) {
-        var s = (status || '').toString();
-        if (/expired/i.test(s)) return 'Tu suscripcion ha vencido.';
-        if (/disabled|banned/i.test(s)) return 'Tu cuenta fue desactivada o bloqueada.';
-        if (/invalid/i.test(s)) return 'Usuario o contrasena incorrectos.';
-        if (s && /\s/.test(s)) return s; // Ya es una frase (p.ej. "Conexion rechazada: ..." o "Supero el limite...").
-        return fallback || 'Tu suscripcion ha vencido o fue desactivada.';
+    function pressDialogButton(i) {
+        var d = currentDialog;
+        if (!d || !d.buttons || !d.buttons[i]) return;
+        var action = d.buttons[i].action;
+        if (!action || action() !== false) closeDialog();
     }
 
-    // --- STARTUP VALIDATION ---
-    function performStartupCheck() {
-        var user = localStorage.getItem('ytmod_user');
-        var pass = localStorage.getItem('ytmod_pass');
+    function closeDialog() {
+        currentDialog = null;
+        var box = el('ytmod-dialog');
+        if (box) box.style.display = 'none';
+        if (dialogQueue.length) showDialog(dialogQueue.shift());
+    }
 
-        if (!user || !pass) {
-            // No credentials saved -> stay on lock screen
-            lockScreen();
-            return;
+    function closeDialogs() {
+        dialogQueue = [];
+        currentDialog = null;
+        var box = el('ytmod-dialog');
+        if (box) box.style.display = 'none';
+    }
+
+    function onDialogKey(e) {
+        var d = currentDialog;
+        var count = (d.buttons || []).length;
+        var code = e.keyCode;
+        e.preventDefault();
+        if (code === KEY_LEFT || code === KEY_UP) {
+            if (dialogButton > 0) dialogButton--;
+            renderDialog();
+        } else if (code === KEY_RIGHT || code === KEY_DOWN) {
+            if (dialogButton < count - 1) dialogButton++;
+            renderDialog();
+        } else if (code === KEY_ENTER || e.key === 'Enter') {
+            if (count) pressDialogButton(dialogButton);
+        } else if (isBack(e)) {
+            if (d.back === null) exitApp();
+            else if (typeof d.back === 'function') {
+                if (d.back() !== false) closeDialog();
+            } else closeDialog();
         }
+    }
 
-        checkingAuth = true;
+    // --- DESPUES DEL LOGIN ---
+    function afterLogin(user) {
+        checkDays(user);
+        checkForTvUpdates();
+    }
+
+    // check_days.php: {status, days_left, alert_title, alert_msg}. Solo avisa, nunca bloquea
+    // (como Roku: de 3 dias a cuenta bloqueada).
+    function checkDays(user) {
         var mac = getDeviceMac();
-        var token = generateToken(user, mac);
-
-        showAuthModal('Chequeando acceso...', 'Buscando validaci\u00f3n del usuario y contrase\u00f1a guardados');
-
-        sendApiRequest('check_api.php', {
-            username: user,
-            password: pass,
-            mac: mac,
-            token: token
-        }, function(err, data) {
-            checkingAuth = false;
-            if (data && Number(data.auth) === 1) {
-                var expTs = Number(localStorage.getItem('ytmod_exp_date')) || 0;
-                var nowTs = Math.floor(Date.now() / 1000);
-                var daysLeft = expTs > nowTs ? Math.floor((expTs - nowTs) / 86400) : 0;
-
-                setModalSuccess('Acceso Concedido!', 'Suscripcion activa (' + daysLeft + ' dias restantes)', function() {
-                    if (typeof Ro === 'function') {
-                        Ro("YouTube Premium", "Suscripcion activa: " + daysLeft + " dias restantes");
-                    }
-                    checkForTvUpdates();
-                });
-            } else {
-                hideAuthModal();
-                lockScreen(err ? 'No se pudo conectar con el servidor.' : statusToMessage(data && data.status));
+        panelRequest('GET', 'check_days.php', { username: user, mac: mac, token: panelToken(user, mac) }, function(res) {
+            var j = res.json;
+            if (!j || String(j.status) !== 'success') return;
+            var days = parseInt(j.days_left, 10);
+            var title = String(j.alert_title || '');
+            if (title && days >= -1 && days <= 3) {
+                showDialog({ title: title, text: String(j.alert_msg || ''), buttons: [{ label: 'Entendido' }] });
             }
         });
     }
 
-    // --- CONTINUOUS LOCK ENFORCEMENT LOOP ---
-    var lockWatcher = setInterval(function() {
-        if (isAuthGranted) {
-            return;
-        }
-        document.documentElement.classList.add('ytmod-locked');
-        var screen = document.getElementById('ytmod-auth-screen');
-        if (!screen && (document.body || document.documentElement)) {
-            createAuthScreen();
-        }
-        // Keep all background video elements paused and muted
-        var vids = document.getElementsByTagName('video');
-        for (var i = 0; i < vids.length; i++) {
-            vids[i].pause();
-            vids[i].muted = true;
-        }
-    }, 150);
-
-    // --- PERIODIC STEALTH CHECK (EVERY 30 MIN) ---
+    // --- VERIFICACION CADA 30 MINUTOS ---
+    // check_api.php es la verificacion ligera. Si dice que no, player_api.php dice por que (y
+    // corrige un reloj distinto); solo una negativa real vuelve al login. Sin red, sigue la sesion.
     setInterval(function() {
         if (!isAuthGranted) return;
-        var user = localStorage.getItem('ytmod_user');
-        var pass = localStorage.getItem('ytmod_pass');
+        var user = store('ytmod_user');
+        var pass = store('ytmod_pass');
         if (!user || !pass) {
-            lockScreen('Sesion requerida.');
+            lockScreen('Sesión cerrada');
             return;
         }
-
         var mac = getDeviceMac();
-        var token = generateToken(user, mac);
-
-        sendApiRequest('check_api.php', {
-            username: user,
-            password: pass,
-            mac: mac,
-            token: token
-        }, function(err, data) {
-            // Solo botamos cuando el panel RESPONDE que no esta autorizado.
-            // Un fallo de red puntual no debe cortar la reproduccion; reintenta al proximo ciclo.
-            if (data && Number(data.auth) !== 1) {
-                lockScreen(statusToMessage(data.status));
-            }
+        panelRequest('POST', 'check_api.php', {
+            username: user, password: pass, mac: mac, token: panelToken(user, mac)
+        }, function(res) {
+            if (!res.json || Number(res.json.auth) === 1) return;
+            panelLogin(user, pass, function(result) {
+                if (result.status === 'ok') {
+                    store('ytmod_exp_date', result.expDate);
+                    store('ytmod_sync_ts', Math.floor(Date.now() / 1000));
+                } else if (result.status === 'denied') {
+                    store('ytmod_logged_in', '0');
+                    lockScreen(result.message);
+                }
+            });
         });
     }, 30 * 60 * 1000);
 
-    // --- IN-APP UPDATER ---
-    // Soporta las dos formas del panel:
-    //  - check_update.php / yt_versions.json: devuelve la ultima version (sin "update_available");
-    //    el cliente compara version_code. Changelog en "release_notes".
-    //  - updateTV.php: devuelve "update_available" y lee la version por GET (v_code/v_name).
+    // --- BLOQUEO CONTINUO ---
+    // Si YouTube borra la pantalla de login, vuelve; los videos de fondo siguen en pausa.
+    setInterval(function() {
+        if (isAuthGranted) return;
+        document.documentElement.classList.add('ytmod-locked');
+        if (!el('ytmod-auth-screen') && (document.body || document.documentElement)) createAuthScreen();
+        pauseVideos();
+    }, 150);
+
+    // --- ACTUALIZADOR DE LA APP ---
+    // updateTV.php recibe la version de esta APK (v_code/v_name) y responde update_available;
+    // check_update.php / yt_versions.json solo dan la ultima version y aqui se compara version_code.
+    // La APK nueva la descarga la app (StarboardBridge.installAppFromURL), con su propia barra de
+    // progreso, y al terminar abre el instalador de Android.
     var UPDATE_ENDPOINT = 'updateTV.php';
     function checkForTvUpdates() {
-        var qs = UPDATE_ENDPOINT + '?v_code=' + encodeURIComponent(CURRENT_TV_VERSION_CODE) +
-                 '&v_name=' + encodeURIComponent(CURRENT_TV_VERSION_NAME);
-        sendApiRequest(qs, {
-            action: 'check',
-            v_code: CURRENT_TV_VERSION_CODE,
-            v_name: CURRENT_TV_VERSION_NAME
-        }, function(err, data) {
+        var code = appVersionCode();
+        var name = appVersionName();
+        var qs = UPDATE_ENDPOINT + '?v_code=' + encodeURIComponent(code) + '&v_name=' + encodeURIComponent(name);
+        panelRequest('POST', qs, { action: 'check', v_code: code, v_name: name }, function(res) {
+            var data = res.json;
             if (!data || !data.download_url) return;
             var latestCode = Number(data.version_code) || 0;
-            var curCode = Number(CURRENT_TV_VERSION_CODE) || 0;
             // Version actual marcada obsoleta en el panel -> actualizacion obligatoria.
-            var isObsolete = (Array.isArray(data.obsolete_versions) &&
-                              data.obsolete_versions.indexOf(curCode) !== -1);
+            var isObsolete = Array.isArray(data.obsolete_versions) &&
+                data.obsolete_versions.map(Number).indexOf(code) !== -1;
             // Hay update si el panel lo dice, o (sin ese campo) si la ultima version es mayor.
-            var hasUpdate = (data.update_available === true) ||
-                            (data.update_available === undefined && latestCode > curCode);
-            if (hasUpdate || isObsolete) {
-                showTvUpdateModal(data, data.is_mandatory === true || isObsolete);
-            }
+            var hasUpdate = data.update_available === true ||
+                (data.update_available === undefined && latestCode > code);
+            if (hasUpdate || isObsolete) showTvUpdate(data, data.is_mandatory === true || isObsolete);
         });
     }
 
-    function showTvUpdateModal(updateData, isMandatory) {
-        var modal = document.getElementById('ytmod-update-modal');
-        var title = document.getElementById('ytmod-update-title');
-        var notes = document.getElementById('ytmod-update-notes');
-        var btnNow = document.getElementById('ytmod-btn-update-now');
-        var btnLater = document.getElementById('ytmod-btn-update-later');
-        var progArea = document.getElementById('ytmod-update-progress-area');
-        var fill = document.getElementById('ytmod-progress-fill');
-        var progText = document.getElementById('ytmod-progress-text');
-        var btnArea = document.getElementById('ytmod-update-buttons');
-
-        if (!modal) return;
-        title.textContent = 'Nueva Version ' + (updateData.version_name || 'TV');
-        // El panel manda las notas en "release_notes" (changelog/notes como respaldo).
-        notes.textContent = updateData.release_notes || updateData.changelog || updateData.notes || 'Mejoras de rendimiento y correcciones de seguridad.';
-
-        // Actualizacion obligatoria: no se puede posponer.
-        if (isMandatory) {
-            btnLater.style.display = 'none';
-        } else {
-            btnLater.style.display = 'inline-block';
-            btnLater.onclick = function() {
-                modal.style.display = 'none';
-            };
-        }
-
-        btnNow.onclick = function() {
-            btnArea.style.display = 'none';
-            progArea.style.display = 'block';
-
-            var progress = 0;
-            var timer = setInterval(function() {
-                progress += Math.floor(Math.random() * 8) + 4;
-                if (progress > 98) progress = 98;
-                fill.style.width = progress + '%';
-                progText.textContent = 'Descargando actualizacion: ' + progress + '%';
-            }, 300);
-
-            if (window.h5vcc && window.h5vcc.tizentube && window.h5vcc.tizentube.InstallAppFromURL) {
-                window.h5vcc.tizentube.InstallAppFromURL(updateData.download_url);
-            } else {
-                console.warn("Native InstallAppFromURL not available.");
-            }
-        };
-
-        modal.style.display = 'flex';
-        btnNow.focus();
+    function showTvUpdate(data, mandatory) {
+        var notes = data.release_notes || data.changelog || data.notes || 'Mejoras de rendimiento y correcciones.';
+        var later = { label: 'Más tarde' };
+        var buttons = [{ label: 'Actualizar ahora', action: function() { return startUpdate(data, mandatory); } }];
+        if (!mandatory) buttons.push(later);
+        showDialog({
+            title: 'Nueva versión ' + (data.version_name || ''),
+            text: (mandatory ? 'Esta actualización es obligatoria.\n\n' : '') + notes,
+            buttons: buttons,
+            back: mandatory ? null : undefined
+        });
     }
 
-    // --- INITIALIZATION ---
+    // Devuelve false: el aviso sigue abierto, ahora diciendo que se descarga.
+    function startUpdate(data, mandatory) {
+        var native = window.h5vcc && window.h5vcc.tizentube && window.h5vcc.tizentube.InstallAppFromURL;
+        if (!native) {
+            currentDialog.text = 'Esta versión de la app no puede instalar actualizaciones sola. Descarga la nueva versión desde:\n' + data.download_url;
+            currentDialog.buttons = mandatory ? [] : [{ label: 'Cerrar' }];
+            renderDialog();
+            return false;
+        }
+        try {
+            window.h5vcc.tizentube.InstallAppFromURL(data.download_url);
+        } catch (e) {
+            reportError('UPDATE', 'InstallAppFromURL: ' + (e && e.message), data.download_url);
+        }
+        var dialog = currentDialog;
+        dialog.text = 'Descargando la actualización…\nAl terminar se abrirá el instalador: elige Instalar.';
+        dialog.buttons = [];
+        renderDialog();
+        // Si la descarga falla o se cancela el instalador, se puede intentar de nuevo.
+        setTimeout(function() {
+            if (currentDialog !== dialog) return;
+            dialog.text = 'Si el instalador no se abrió, inténtalo de nuevo.';
+            dialog.buttons = [{ label: 'Reintentar', action: function() { return startUpdate(data, mandatory); } }];
+            if (!mandatory) dialog.buttons.push({ label: 'Más tarde' });
+            renderDialog();
+        }, 45000);
+        return false;
+    }
+
+    // --- INICIO ---
     function init() {
-        createAuthScreen();
-        performStartupCheck();
+        startLogin();
     }
 
     if (document.readyState === 'loading') {
