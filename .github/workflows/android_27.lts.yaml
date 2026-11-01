@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: '1'
+      publish_release:
+        description: 'Publicar la APK como Release al terminar (apagado: solo queda como artefacto).'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   # FRANCOTIRADOR: Únicamente la versión universal para TV Box y Móviles
@@ -37,11 +42,12 @@ jobs:
       datadog_api_key: ${{ secrets.DD_API_KEY }}
       android_keystore_b64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
 
-  # Publica la APK como Release (enlace fijo: releases/latest/download/YouTubeModTV.apk).
+  # Publica la APK como Release (enlace fijo: releases/latest/download/YouTubeModTV.apk) solo si
+  # se pide al lanzarlo a mano (publish_release); si no, la APK queda solo como artefacto.
   # Solo con la llave fija, para no publicar APKs que no se puedan instalar encima.
   release:
     needs: [android-arm]
-    if: ${{ github.ref == 'refs/heads/main' && github.event_name != 'pull_request' && needs.android-arm.outputs.timed_out != 'true' }}
+    if: ${{ github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true' && needs.android-arm.outputs.timed_out != 'true' }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -89,4 +95,4 @@ jobs:
           fi
           NEXT=$((ATTEMPT + 1))
           echo "Relanzando compilación (intento $NEXT) en ${{ github.ref_name }}..."
-          gh workflow run android_27.lts.yaml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" -f nightly=false -f attempt="$NEXT"
+          gh workflow run android_27.lts.yaml --repo "${{ github.repository }}" --ref "${{ github.ref_name }}" -f nightly=false -f attempt="$NEXT" -f publish_release="${{ github.event.inputs.publish_release || 'false' }}"
