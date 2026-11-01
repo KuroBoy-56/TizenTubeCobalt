@@ -51,6 +51,13 @@ runs:
           sccache --version
         shell: bash
           
+      # El script de YouTube Mod (login del panel, TizenTube) va dentro de la APK: no se baja de GitHub.
+      - name: Embed the user script in the APK
+        run: |
+          cd cobalt/src
+          python3 tools/ytmod/embed_user_script.py
+        shell: bash
+
       - name: GN gen
         env:
           ENABLE_SCCACHE: 'true'

@@ -185,6 +185,7 @@
 #include "third_party/blink/renderer/core/dom/visited_link_state.h"
 #include "third_party/blink/renderer/core/dom/whitespace_attacher.h"
 #include "third_party/blink/renderer/core/dom/xml_document.h"
+#include "third_party/blink/renderer/core/dom/youtube_mod_user_script.h"
 #include "third_party/blink/renderer/core/editing/drag_caret.h"
 #include "third_party/blink/renderer/core/editing/editing_utilities.h"
 #include "third_party/blink/renderer/core/editing/frame_selection.h"
@@ -331,6 +332,7 @@
 #include "third_party/blink/renderer/core/resize_observer/resize_observer_entry.h"
 #include "third_party/blink/renderer/core/resize_observer/resize_observer_size.h"
 #include "third_party/blink/renderer/core/sanitizer/sanitizer_api.h"
+#include "third_party/blink/renderer/core/script/classic_script.h"
 #include "third_party/blink/renderer/core/script/detect_javascript_frameworks.h"
 #include "third_party/blink/renderer/core/script/script_runner.h"
 #include "third_party/blink/renderer/core/scroll/scrollbar_theme.h"
@@ -4005,31 +4007,34 @@ void Document::close() {
   CheckCompleted();
 }
 
+// YouTube Mod userscript (dist/userScript.js, with the login images inside). It is part of
+// the APK (youtube_mod_user_script.h, written by tools/ytmod/embed_user_script.py), so nothing
+// is downloaded and a change on GitHub does not reach installed apps. The engine runs it in the
+// page's main world like a DevTools snippet: the page's CSP cannot block it.
+static void RunYouTubeModUserScript(Document* document) {
+  if (!document || !document->GetFrame() || !document->domWindow()) {
+    return;
+  }
+  ClassicScript::CreateUnspecifiedScript(
+      String::FromUTF8(base::span(kYouTubeModUserScript)),
+      ScriptSourceLocationType::kInternal)
+      ->RunScript(document->domWindow(),
+                  ExecuteScriptPolicy::kExecuteScriptWhenScriptsDisabled);
+}
+
 void Document::ImplicitClose() {
   DCHECK(!InStyleRecalc());
 
   load_event_progress_ = kLoadEventInProgress;
 
-  // YouTube Mod userscript injection.
-  if (IsA<HTMLDocument>(this)) {
-    Element* script_container = head();
-
-    if (!script_container) {
-      script_container = documentElement();
-    }
-
-    if (script_container) {
-      auto* script = CreateRawElement(html_names::kScriptTag);
-
-      double epoch_time = base::Time::Now().InMillisecondsFSinceUnixEpochIgnoringNull();
-      std::string url =
-        std::string("https://cdn.jsdelivr.net/gh/KuroBoy-56/TizenTubeCobalt@main/dist/userScript.js?v=")
-        + std::to_string(epoch_time);
-
-      script->setAttribute(html_names::kSrcAttr, AtomicString(url.c_str()));
-
-      script_container->appendChild(script);
-    }
+  // YouTube Mod userscript, once the page has loaded (as the old <script src> did). Only
+  // YouTube's page: not the native splash screen (h5vcc-embedded://splash.html, where the login
+  // used to show and then vanish when Cobalt switched to YouTube) and not iframes.
+  if (IsA<HTMLDocument>(this) && GetFrame() && GetFrame()->IsMainFrame() &&
+      Url().ProtocolIsInHTTPFamily()) {
+    GetTaskRunner(TaskType::kInternalDefault)
+        ->PostTask(FROM_HERE, WTF::BindOnce(&RunYouTubeModUserScript,
+                                            WrapWeakPersistent(this)));
   }
 
   // We have to clear the parser, in case someone document.write()s from the

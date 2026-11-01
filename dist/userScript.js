@@ -1,21 +1,30 @@
 /* === YOUTUBE MOD TV: LOGIN DEL PANEL (IGUAL QUE TIZENTUBE ROKU), VERIFICACION Y ACTUALIZADOR === */
-// La app carga este archivo desde jsDelivr (third_party/blink/renderer/core/dom/document.cc), asi
-// que lo de aqui llega a las APK ya instaladas sin compilar otra.
+// Va dentro de la APK: tools/ytmod/embed_user_script.py lo convierte (con las imagenes del login)
+// en third_party/blink/renderer/core/dom/youtube_mod_user_script.h y Cobalt lo ejecuta al cargar
+// YouTube (document.cc). La APK no descarga nada de GitHub; solo las APK 2.0.2 y anteriores
+// todavia bajan este archivo de jsDelivr.
 // - Login: la misma pantalla que TizenTube Roku (components/LoginScreen.xml de tizentuberoku):
-//   fondo y logo de dist/login/, caja con Usuario, Contrasena y ENTRAR, e ID del dispositivo. Es lo
-//   primero que se ve; YouTube queda oculto, en pausa y sin teclas hasta que el panel
-//   (player_api.php) acepta el usuario. Una sesion guardada se valida otra vez en la misma caja.
+//   fondo y logo de dist/login/, caja con Usuario, Contrasena y ENTRAR, teclado en pantalla e ID
+//   del dispositivo. Es lo primero que se ve; YouTube queda oculto, en pausa y sin teclas hasta
+//   que el panel (player_api.php) acepta el usuario. Una sesion guardada se valida otra vez.
 // - Verificacion cada 30 minutos (check_api.php): solo una negativa del panel cierra la sesion.
 // - Aviso de vencimiento (check_days.php) y actualizador (updateTV.php + instalador nativo).
 (function() {
     'use strict';
 
+    // Solo en la pagina de YouTube: no en el splash nativo de Cobalt (h5vcc-embedded://) ni en
+    // iframes. En el splash el login tapaba la carga y se iba solo al cambiar a YouTube.
+    if (!/^https?:$/.test(location.protocol) || window.top !== window) return;
+
     var PRIMARY_API_BASE = "https://garevynpanels.latmpx.com/youtube/panel/api/";
     var FALLBACK_API_BASE = "https://musicmod.club/youtube/panel/api/";
     var APP_SECRET = "kuropanchi950125";
+    // Imagenes del login: en la APK van aqui como data: (embed_user_script.py); las APK viejas
+    // las bajan de jsDelivr.
+    var EMBEDDED_ASSETS = null; // @ytmod-embedded-assets
     var ASSETS_URL = "https://cdn.jsdelivr.net/gh/KuroBoy-56/TizenTubeCobalt@main/dist/login/";
-    var BG_IMAGE_URL = ASSETS_URL + "login_bg.jpg";
-    var LOGO_URL = ASSETS_URL + "logo_login.png";
+    var BG_IMAGE_URL = (EMBEDDED_ASSETS && EMBEDDED_ASSETS.bg) || ASSETS_URL + "login_bg.jpg";
+    var LOGO_URL = (EMBEDDED_ASSETS && EMBEDDED_ASSETS.logo) || ASSETS_URL + "logo_login.png";
     var BRAND_NAME = "TizenTube";
     var SECURITY_FAILED = "Conexión rechazada: Protocolo de seguridad fallido.";
     var FALLBACK_VERSION_NAME = "1.0.0";
@@ -313,11 +322,11 @@
 
     // --- ESTILOS ---
     // La pantalla se dibuja en 1920x1080, como la de Roku, y se escala a la TV (layout()).
-    function injectStyles() {
-        if (document.getElementById('ytmod-auth-styles')) return;
-        var style = document.createElement('style');
-        style.id = 'ytmod-auth-styles';
-        style.textContent = `
+    // YouTube TV tiene CSP (style-src con nonce) y exige Trusted Types: un <style> nuevo sin su
+    // nonce se bloquea y innerHTML lanza un error. Por eso el login no se veia y el mando quedaba
+    // atrapado en la pantalla "Comenzar" de YouTube. Aqui los estilos van en una hoja construida
+    // (adoptedStyleSheets, que no pasa por la CSP) y la pantalla se arma con createElement.
+    var LOGIN_CSS = `
             /* BLOQUEO: NADA DE YOUTUBE SE VE NI SUENA HASTA QUE EL PANEL ACEPTA EL USUARIO */
             html.ytmod-locked body > *:not(#ytmod-auth-screen):not(#ytmod-auth-styles) {
                 display: none !important;
@@ -575,8 +584,85 @@
             .ytm-dialog-button.ytm-focused {
                 background: #FF2E88;
             }
-        `;
-        (document.head || document.documentElement).appendChild(style);
+            /* TECLADO EN PANTALLA (a la derecha de la caja, como el de Roku) */
+            .ytm-kb {
+                position: absolute;
+                left: 880px;
+                top: 230px;
+                width: 940px;
+                height: 620px;
+                background: rgba(10, 6, 20, 0.88);
+                display: none;
+            }
+            .ytm-kb.ytm-open {
+                display: block;
+            }
+            .ytm-kb-title {
+                position: absolute;
+                left: 34px;
+                top: 26px;
+                color: #FFFFFF;
+                font-size: 30px;
+                font-weight: 500;
+            }
+            .ytm-kb-key {
+                position: absolute;
+                height: 70px;
+                line-height: 70px !important;
+                background: rgba(255, 255, 255, 0.10);
+                color: #FFFFFF;
+                font-size: 34px;
+                text-align: center;
+            }
+            .ytm-kb-key.ytm-wide {
+                font-size: 28px;
+                font-weight: 700;
+            }
+            .ytm-kb-key.ytm-on {
+                color: #FF2E88;
+            }
+            .ytm-kb-key.ytm-focused {
+                background: #FF2E88;
+                color: #FFFFFF;
+            }
+            .ytm-kb-hint {
+                position: absolute;
+                left: 34px;
+                top: 562px;
+                color: #9A9AB0;
+                font-size: 25px;
+            }
+    `;
+
+    // Lo minimo para tapar YouTube aunque la hoja no cargue: estilos puestos por CSSOM, que la
+    // CSP no bloquea.
+    var ROOT_CSS = 'position:fixed;left:0;top:0;width:100vw;height:100vh;z-index:2147483647;' +
+        'overflow:hidden;margin:0;padding:0;';
+
+    var loginSheet = null;
+    var loginStyle = null;
+    function injectStyles() {
+        try {
+            if (window.CSSStyleSheet && 'adoptedStyleSheets' in document) {
+                if (!loginSheet) {
+                    loginSheet = new CSSStyleSheet();
+                    loginSheet.replaceSync(LOGIN_CSS);
+                }
+                var sheets = Array.prototype.slice.call(document.adoptedStyleSheets);
+                if (sheets.indexOf(loginSheet) < 0) document.adoptedStyleSheets = sheets.concat([loginSheet]);
+                return;
+            }
+        } catch (e) {
+            reportError('LOGIN_UI', 'Hoja de estilos: ' + (e && e.message), e && e.stack);
+        }
+        // Sin hojas construidas: un <style> con el nonce de la pagina.
+        if (loginStyle && loginStyle.isConnected) return;
+        loginStyle = document.createElement('style');
+        loginStyle.id = 'ytmod-auth-styles';
+        var withNonce = document.querySelector('style[nonce], script[nonce]');
+        if (withNonce && withNonce.nonce) loginStyle.nonce = withNonce.nonce;
+        loginStyle.textContent = LOGIN_CSS;
+        (document.head || document.documentElement).appendChild(loginStyle);
     }
 
     // Escala el lienzo de 1920x1080 a la pantalla, centrado.
@@ -598,59 +684,77 @@
         return document.getElementById(id);
     }
 
+    // Arma un elemento sin innerHTML (Trusted Types): props.text es el texto, props.cls la clase.
+    function make(tag, props, kids) {
+        var node = document.createElement(tag);
+        props = props || {};
+        for (var k in props) {
+            if (!props.hasOwnProperty(k)) continue;
+            if (k === 'text') node.textContent = props[k];
+            else if (k === 'cls') node.className = props[k];
+            else node.setAttribute(k, props[k]);
+        }
+        for (var i = 0; kids && i < kids.length; i++) {
+            if (kids[i]) node.appendChild(kids[i]);
+        }
+        return node;
+    }
+
+    // Los campos son de solo lectura: se escribe con el teclado del login (el de Android no
+    // siempre aparece en Cobalt), con los numeros del mando o con un teclado fisico.
+    function field(id, label, inputId, type) {
+        return make('div', { id: id, cls: 'ytm-field' }, [
+            make('div', { cls: 'ytm-field-label', text: label }),
+            make('input', {
+                id: inputId, cls: 'ytm-input', type: type, placeholder: 'Pulsa OK para escribir',
+                readonly: 'readonly', tabindex: '-1', autocomplete: 'off', autocapitalize: 'off',
+                autocorrect: 'off', spellcheck: 'false'
+            }),
+            make('div', { cls: 'ytm-field-line' })
+        ]);
+    }
+
     function createAuthScreen() {
-        injectStyles();
-        if (!isAuthGranted) document.documentElement.classList.add('ytmod-locked');
-        if (el('ytmod-auth-screen')) return;
+        try {
+            injectStyles();
+            if (!isAuthGranted) document.documentElement.classList.add('ytmod-locked');
+            if (el('ytmod-auth-screen')) return;
 
-        var screen = document.createElement('div');
-        screen.id = 'ytmod-auth-screen';
-        screen.innerHTML = `
-            <div class="ytm-stage">
-                <div class="ytm-box">
-                    <div class="ytm-accent"></div>
-                    <img class="ytm-logo" src="${LOGO_URL}" alt="">
-                    <div class="ytm-brand">${BRAND_NAME}</div>
-                    <div class="ytm-headline">Todo tu contenido favorito</div>
-                    <div class="ytm-noads">Sin Anuncios</div>
-                    <div class="ytm-bar"></div>
+            var screen = make('div', { id: 'ytmod-auth-screen' }, [
+                make('div', { cls: 'ytm-stage' }, [
+                    make('div', { cls: 'ytm-box' }, [
+                        make('div', { cls: 'ytm-accent' }),
+                        make('img', { cls: 'ytm-logo', src: LOGO_URL, alt: '' }),
+                        make('div', { cls: 'ytm-brand', text: BRAND_NAME }),
+                        make('div', { cls: 'ytm-headline', text: 'Todo tu contenido favorito' }),
+                        make('div', { cls: 'ytm-noads', text: 'Sin Anuncios' }),
+                        make('div', { cls: 'ytm-bar' }),
+                        field('ytm-field-user', 'Usuario', 'ytmod-username-input', 'text'),
+                        field('ytm-field-pass', 'Contraseña', 'ytmod-password-input', 'password'),
+                        make('div', { id: 'ytm-enter', cls: 'ytm-enter', text: 'ENTRAR' }),
+                        make('div', { id: 'ytm-status', cls: 'ytm-status' }),
+                        make('div', { id: 'ytm-device', cls: 'ytm-device' })
+                    ]),
+                    buildKeyboard()
+                ])
+            ]);
+            screen.style.cssText = ROOT_CSS + 'background:#05030a;';
+            (document.body || document.documentElement).appendChild(screen);
+            if (isAuthGranted) screen.style.display = 'none';
 
-                    <div id="ytm-field-user" class="ytm-field">
-                        <div class="ytm-field-label">Usuario</div>
-                        <input id="ytmod-username-input" class="ytm-input" type="text" placeholder="Escribe tu usuario"
-                            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-                        <div class="ytm-field-line"></div>
-                    </div>
-                    <div id="ytm-field-pass" class="ytm-field">
-                        <div class="ytm-field-label">Contraseña</div>
-                        <input id="ytmod-password-input" class="ytm-input" type="password" placeholder="Escribe tu contraseña"
-                            autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false">
-                        <div class="ytm-field-line"></div>
-                    </div>
-                    <div id="ytm-enter" class="ytm-enter">ENTRAR</div>
+            el('ytm-device').textContent = 'ID del dispositivo: ' + deviceId();
+            el('ytmod-username-input').value = store('ytmod_user');
 
-                    <div id="ytm-status" class="ytm-status"></div>
-                    <div id="ytm-device" class="ytm-device"></div>
-                </div>
-            </div>
-        `;
-        (document.body || document.documentElement).appendChild(screen);
-        if (isAuthGranted) screen.style.display = 'none';
+            // Con mouse o pantalla tactil tambien funciona.
+            el('ytm-field-user').addEventListener('click', function() { focusIndex = 0; openKeyboard(); });
+            el('ytm-field-pass').addEventListener('click', function() { focusIndex = 1; openKeyboard(); });
+            el('ytm-enter').addEventListener('click', function() { focusIndex = 2; closeKeyboard(); submit(); });
 
-        el('ytm-device').textContent = 'ID del dispositivo: ' + deviceId();
-        el('ytmod-username-input').value = store('ytmod_user');
-
-        // Si el teclado de Android pasa solo al otro campo ("Siguiente"), el foco lo sigue.
-        el('ytmod-username-input').addEventListener('focus', function() { focusIndex = 0; render(); });
-        el('ytmod-password-input').addEventListener('focus', function() { focusIndex = 1; render(); });
-
-        // Con mouse o pantalla tactil tambien funciona.
-        el('ytm-field-user').addEventListener('click', function() { focusIndex = 0; render(); openField(); });
-        el('ytm-field-pass').addEventListener('click', function() { focusIndex = 1; render(); openField(); });
-        el('ytm-enter').addEventListener('click', function() { focusIndex = 2; render(); submit(); });
-
-        layout();
-        render();
+            layout();
+            render();
+        } catch (e) {
+            reportError('LOGIN_UI', 'Pantalla de login: ' + (e && e.message), e && e.stack);
+        }
     }
 
     function inputs() {
@@ -666,6 +770,7 @@
         enter.classList.toggle('ytm-focused', focusIndex === 2);
         status.textContent = statusText;
         status.classList.toggle('ytm-ok', statusOk);
+        renderKeyboard();
     }
 
     function showStatus(text, ok) {
@@ -674,19 +779,149 @@
         render();
     }
 
-    // OK en un campo: el teclado de Android TV se abre al darle el foco al campo.
-    function openField() {
-        var input = inputs()[focusIndex];
-        if (input) input.focus();
+    // --- TECLADO EN PANTALLA ---
+    // OK en Usuario o Contrasena lo abre. Listo pasa al campo siguiente (como Aceptar en Roku) y
+    // Atras lo cierra sin borrar lo escrito.
+    var KB_CHARS = ['1234567890', 'qwertyuiop', 'asdfghjklñ', 'zxcvbnm-_.', '@#$%&*!?+/'];
+    var KB_ACTIONS = [
+        { label: 'Mayús', action: 'shift', span: 2 },
+        { label: 'Espacio', action: 'space', span: 3 },
+        { label: 'Borrar', action: 'delete', span: 2 },
+        { label: 'Listo', action: 'done', span: 3 }
+    ];
+    var KB_KEY_W = 80, KB_GAP = 8, KB_ROW_H = 70, KB_LEFT = 34, KB_TOP = 84;
+    var kbRows = [];
+    var kbOpen = false;
+    var kbRow = 1, kbKey = 0;
+    var kbShift = false;
+
+    function buildKeyboard() {
+        var panel = make('div', { id: 'ytm-kb', cls: 'ytm-kb' }, [
+            make('div', { id: 'ytm-kb-title', cls: 'ytm-kb-title' }),
+            make('div', { cls: 'ytm-kb-hint', text: 'OK escribe la tecla  ·  Listo pasa al siguiente  ·  Atrás cierra' })
+        ]);
+        kbRows = [];
+        function addKey(row, item, col) {
+            var node = make('div', { cls: 'ytm-kb-key' + (item.action ? ' ytm-wide' : '') });
+            node.style.left = (KB_LEFT + col * (KB_KEY_W + KB_GAP)) + 'px';
+            node.style.top = (KB_TOP + row * (KB_ROW_H + KB_GAP)) + 'px';
+            node.style.width = (item.span * KB_KEY_W + (item.span - 1) * KB_GAP) + 'px';
+            var key = { node: node, col: col, span: item.span, ch: item.ch, action: item.action, label: item.label };
+            node.addEventListener('click', function() { pressKey(key); });
+            panel.appendChild(node);
+            return key;
+        }
+        KB_CHARS.forEach(function(chars, r) {
+            var row = [];
+            for (var c = 0; c < chars.length; c++) row.push(addKey(r, { ch: chars.charAt(c), span: 1 }, c));
+            kbRows.push(row);
+        });
+        var actions = [];
+        var col = 0;
+        KB_ACTIONS.forEach(function(a) {
+            actions.push(addKey(KB_CHARS.length, a, col));
+            col += a.span;
+        });
+        kbRows.push(actions);
+        return panel;
     }
 
-    function closeKeyboard() {
-        var list = inputs();
-        for (var i = 0; i < list.length; i++) {
-            if (list[i] && document.activeElement === list[i]) list[i].blur();
+    function renderKeyboard() {
+        var panel = el('ytm-kb');
+        if (!panel) return;
+        panel.classList.toggle('ytm-open', kbOpen);
+        if (!kbOpen) return;
+        el('ytm-kb-title').textContent = 'Escribe tu ' + (focusIndex === 1 ? 'contraseña' : 'usuario');
+        for (var r = 0; r < kbRows.length; r++) {
+            for (var k = 0; k < kbRows[r].length; k++) {
+                var key = kbRows[r][k];
+                key.node.textContent = key.ch ? (kbShift ? key.ch.toUpperCase() : key.ch) : key.label;
+                key.node.classList.toggle('ytm-focused', r === kbRow && k === kbKey);
+                key.node.classList.toggle('ytm-on', key.action === 'shift' && kbShift);
+            }
         }
     }
 
+    // Arriba/abajo va a la tecla que esta debajo (las anchas cubren varias columnas);
+    // izquierda/derecha dan la vuelta en la fila.
+    function moveKey(dr, dc) {
+        var row = kbRows[kbRow];
+        if (dc) {
+            kbKey = (kbKey + dc + row.length) % row.length;
+        } else {
+            var nr = kbRow + dr;
+            if (nr < 0 || nr >= kbRows.length) return;
+            var cur = row[kbKey];
+            var center = cur.col + Math.floor((cur.span - 1) / 2);
+            var next = kbRows[nr];
+            var best = 0;
+            for (var i = 0; i < next.length; i++) {
+                if (next[i].col <= center) best = i;
+            }
+            kbRow = nr;
+            kbKey = best;
+        }
+        renderKeyboard();
+    }
+
+    function currentInput() {
+        return inputs()[focusIndex === 1 ? 1 : 0];
+    }
+
+    function typeText(s) {
+        var input = currentInput();
+        if (!input || input.value.length >= 64) return;
+        input.value += s;
+        if (statusText && !statusOk) showStatus('', false);
+    }
+
+    function deleteChar() {
+        var input = currentInput();
+        if (input && input.value) input.value = input.value.slice(0, -1);
+    }
+
+    function pressKey(key) {
+        if (busy) return;
+        if (key.ch) typeText(kbShift ? key.ch.toUpperCase() : key.ch);
+        else if (key.action === 'shift') kbShift = !kbShift;
+        else if (key.action === 'space') typeText(' ');
+        else if (key.action === 'delete') deleteChar();
+        else if (key.action === 'done') {
+            keyboardDone();
+            return;
+        }
+        renderKeyboard();
+    }
+
+    function openKeyboard() {
+        if (busy || focusIndex > 1) return;
+        kbOpen = true;
+        kbRow = 1;
+        kbKey = 0;
+        render();
+    }
+
+    function closeKeyboard() {
+        if (!kbOpen) return;
+        kbOpen = false;
+        render();
+    }
+
+    // Listo: con algo escrito pasa al siguiente; de Usuario a Contrasena el teclado sigue abierto
+    // si la contrasena esta vacia.
+    function keyboardDone() {
+        var input = currentInput();
+        kbOpen = false;
+        if (input && input.value.trim() !== '') {
+            focusIndex++;
+            if (focusIndex === 1 && !inputs()[1].value) {
+                kbOpen = true;
+                kbRow = 1;
+                kbKey = 0;
+            }
+        }
+        render();
+    }
     function submit() {
         if (busy) return;
         var list = inputs();
@@ -766,6 +1001,7 @@
     function lockScreen(message) {
         isAuthGranted = false;
         busy = false;
+        kbOpen = false;
         closeDialogs();
         createAuthScreen();
         document.documentElement.classList.add('ytmod-locked');
@@ -801,13 +1037,20 @@
 
     // --- MANDO DE LA TV (fase de captura: YouTube no recibe nada mientras hay login o aviso) ---
     var KEY_UP = 38, KEY_DOWN = 40, KEY_LEFT = 37, KEY_RIGHT = 39, KEY_ENTER = 13;
+    // Atras del mando llega a la pagina como BrowserBack (166) en Cobalt; Escape en otros.
     function isBack(e) {
-        return e.keyCode === 27 || e.keyCode === 8 && !isTyping() || e.keyCode === 10009 || e.keyCode === 461 ||
+        return e.keyCode === 27 || e.keyCode === 166 || e.keyCode === 10009 || e.keyCode === 461 ||
             e.key === 'Escape' || e.key === 'GoBack' || e.key === 'BrowserBack';
     }
-    function isTyping() {
-        var a = document.activeElement;
-        return !!a && (a.id === 'ytmod-username-input' || a.id === 'ytmod-password-input');
+    function isEnterKey(e) {
+        return e.keyCode === KEY_ENTER || e.key === 'Enter';
+    }
+    function isDelete(e) {
+        return e.keyCode === 8 || e.key === 'Backspace';
+    }
+    // Una letra, numero o simbolo (teclado fisico o numeros del mando).
+    function printable(e) {
+        return e.key && e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey ? e.key : '';
     }
 
     // Atras en el login sale de la app, como en Roku.
@@ -822,40 +1065,33 @@
     }
 
     function onLoginKey(e) {
-        if (busy) {
-            e.preventDefault();
+        e.preventDefault();
+        if (busy) return;
+        var code = e.keyCode;
+        if (kbOpen) {
+            if (code === KEY_UP) moveKey(-1, 0);
+            else if (code === KEY_DOWN) moveKey(1, 0);
+            else if (code === KEY_LEFT) moveKey(0, -1);
+            else if (code === KEY_RIGHT) moveKey(0, 1);
+            else if (isEnterKey(e)) pressKey(kbRows[kbRow][kbKey]);
+            else if (isBack(e)) closeKeyboard();
+            else if (isDelete(e)) deleteChar();
+            else if (printable(e)) typeText(printable(e));
             return;
         }
-        var code = e.keyCode;
         if (code === KEY_UP || code === KEY_DOWN) {
-            e.preventDefault();
-            closeKeyboard();
             if (code === KEY_UP && focusIndex > 0) focusIndex--;
             if (code === KEY_DOWN && focusIndex < 2) focusIndex++;
             render();
-        } else if (code === KEY_ENTER || e.key === 'Enter') {
-            if (focusIndex === 2) {
-                e.preventDefault();
-                submit();
-                return;
-            }
-            var input = inputs()[focusIndex];
-            if (document.activeElement !== input) {
-                // Primer OK: el campo toma el foco y se abre el teclado.
-                e.preventDefault();
-                openField();
-            } else if (input.value.trim() !== '') {
-                // "Listo" en el teclado: como Aceptar en Roku, pasa al siguiente.
-                e.preventDefault();
-                closeKeyboard();
-                focusIndex++;
-                render();
-            }
-            // Campo vacio y con foco: el OK sigue su camino normal (vuelve a abrir el teclado).
+        } else if (isEnterKey(e)) {
+            if (focusIndex === 2) submit();
+            else openKeyboard();
         } else if (isBack(e)) {
-            e.preventDefault();
-            if (isTyping()) closeKeyboard();
-            else exitApp();
+            exitApp();
+        } else if (focusIndex < 2 && isDelete(e)) {
+            deleteChar();
+        } else if (focusIndex < 2 && printable(e)) {
+            typeText(printable(e));
         }
     }
 
@@ -901,12 +1137,17 @@
         injectStyles();
         var box = el('ytmod-dialog');
         if (!box) {
-            box = document.createElement('div');
-            box.id = 'ytmod-dialog';
-            box.innerHTML = '<div class="ytm-stage"><div class="ytm-dialog-box"><div class="ytm-accent"></div>' +
-                '<div id="ytm-dialog-title" class="ytm-dialog-title"></div>' +
-                '<div id="ytm-dialog-text" class="ytm-dialog-text"></div>' +
-                '<div id="ytm-dialog-buttons" class="ytm-dialog-buttons"></div></div></div>';
+            box = make('div', { id: 'ytmod-dialog' }, [
+                make('div', { cls: 'ytm-stage' }, [
+                    make('div', { cls: 'ytm-dialog-box' }, [
+                        make('div', { cls: 'ytm-accent' }),
+                        make('div', { id: 'ytm-dialog-title', cls: 'ytm-dialog-title' }),
+                        make('div', { id: 'ytm-dialog-text', cls: 'ytm-dialog-text' }),
+                        make('div', { id: 'ytm-dialog-buttons', cls: 'ytm-dialog-buttons' })
+                    ])
+                ])
+            ]);
+            box.style.cssText = ROOT_CSS + 'background:rgba(0,0,0,0.6);display:none;';
             (document.body || document.documentElement).appendChild(box);
         }
         currentDialog = d;
@@ -922,7 +1163,7 @@
         el('ytm-dialog-title').textContent = d.title || '';
         el('ytm-dialog-text').textContent = d.text || '';
         var area = el('ytm-dialog-buttons');
-        area.innerHTML = '';
+        while (area.firstChild) area.removeChild(area.firstChild);
         var buttons = d.buttons || [];
         if (dialogButton >= buttons.length) dialogButton = 0;
         buttons.forEach(function(b, i) {
@@ -1029,6 +1270,7 @@
     // Si YouTube borra la pantalla de login, vuelve; los videos de fondo siguen en pausa.
     setInterval(function() {
         if (isAuthGranted) return;
+        injectStyles();
         document.documentElement.classList.add('ytmod-locked');
         if (!el('ytmod-auth-screen') && (document.body || document.documentElement)) createAuthScreen();
         pauseVideos();

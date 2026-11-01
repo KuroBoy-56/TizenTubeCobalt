@@ -23,13 +23,17 @@ Cobalt is a lightweight, cross-platform application container and runtime for HT
 
 ## 🔐 Panel login, verification and updates
 
-The app loads `dist/userScript.js` from jsDelivr when it opens (see `third_party/blink/renderer/core/dom/document.cc`), so a change to that file reaches every installed APK without building a new one. Its first part is the access lock, the same as TizenTube Roku's:
+`dist/userScript.js` is part of the APK: `tools/ytmod/embed_user_script.py` turns it, with the login images in `dist/login/`, into `third_party/blink/renderer/core/dom/youtube_mod_user_script.h`, and Cobalt runs it when YouTube loads (`third_party/blink/renderer/core/dom/document.cc`). The app downloads nothing from GitHub or jsDelivr, so a change pushed here only reaches TVs with a new APK. The build regenerates the header before compiling; locally, run the script after editing either folder (`--check` tells whether the header is up to date). APKs 2.0.2 and older still load `dist/userScript.js` from jsDelivr.
 
-- **Login first**: the login box is the first thing on screen, with the same background and logo as the Roku app (`dist/login/`), *Usuario*, *Contraseña*, *ENTRAR* and the device ID as the panel stores it. YouTube stays hidden, paused and without remote keys until the panel (`api/player_api.php`) accepts the user. OK on a field opens the Android keyboard, *Listo* moves to the next one, and Back leaves the app.
+The script runs only in YouTube's page, not in Cobalt's native splash screen (`h5vcc-embedded://splash.html`) or in iframes. YouTube TV's page has a CSP (styles need its nonce) and requires Trusted Types, so the login never uses `innerHTML` or a plain `<style>`: its styles are a constructed stylesheet (`adoptedStyleSheets`) and the screen is built with `createElement`. Before this, the login only appeared in the splash, vanished when Cobalt switched to YouTube, and the remote stayed locked on YouTube's *Comenzar* screen.
+
+Its first part is the access lock, the same as TizenTube Roku's:
+
+- **Login first**: the login box is the first thing on screen, with the same background and logo as the Roku app (`dist/login/`), *Usuario*, *Contraseña*, *ENTRAR* and the device ID as the panel stores it. YouTube stays hidden, paused and without remote keys until the panel (`api/player_api.php`) accepts the user. OK on a field opens the login's own on-screen keyboard (letters, numbers, symbols, *Mayús*, *Espacio*, *Borrar*, *Listo*); *Listo* moves to the next field and Back closes it. The remote's number keys and a physical keyboard also type. Back on the login leaves the app.
 - **Saved session**: the box still shows and validates the saved user again (focus on *ENTRAR*); a network error leaves it there to retry.
 - **Token**: `sha256(user + mac + hour in America/Panama + secret)`. If the TV clock is off, it retries once with the panel's own time and keeps the difference.
 - **Verification** every 30 minutes (`api/check_api.php`). If it says no, `player_api.php` gives the reason; only a real refusal goes back to the login (no network keeps the session).
 - **Expiry notice** (`api/check_days.php`) from 3 days left, and **updates** (`api/updateTV.php`): the app downloads the new APK with its own progress bar and opens the Android installer. A version marked mandatory or obsolete cannot be postponed.
 - Login network or server errors are reported to `api/log_error.php` (`LOGIN_RED`, `LOGIN_RESPUESTA`).
 
-The version sent to the panel is the installed APK's (`version_name` in `cobalt/android/BUILD.gn`, e.g. `2.0.2`, code `202`: its digits). To publish an update, raise `version_code`/`version_name` in `BUILD.gn` (keep each part below 10), build it, and register that same code in the panel.
+The version sent to the panel is the installed APK's (`version_name` in `cobalt/android/BUILD.gn`, e.g. `2.0.3`, code `203`: its digits). To publish an update, raise `version_code`/`version_name` in `BUILD.gn` (keep each part below 10), build it, and register that same code in the panel.
