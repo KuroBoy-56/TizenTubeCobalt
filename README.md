@@ -21,6 +21,11 @@ Cobalt is a lightweight, cross-platform application container and runtime for HT
 1. Sideload or install the APK on your Android TV / Android device.
 2. Open the app and enjoy an enhanced streaming experience!
 
+## 📦 Package, name, icon and signing
+
+- Package `com.io.kuromusic.garevyndev` (`manifest_package` in `cobalt/android/BUILD.gn`), shown as **YouTube Mod**, with the YouTube logo on white as icon and TV banner (`cobalt/shell/android/java/res/`). The login shows the YouTube logo and **Premium** in YouTube's font (YTSans, loaded by the YouTube TV page).
+- Signing: the build signs with the owner's key when the repository secret `FIRMA_KEY` holds the Android Studio keystore (`.jks`) **in base64**, with `FIRMA_PASSWORD` (store password), `FIRMA_ALIAS` (key alias; if missing, the first private key) and `FIRMA_KEY_PASSWORD` (if different from the store password). In PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\ruta\firma.jks")) | Set-Clipboard`, then paste it as the secret's value. Without a valid keystore the build says so in its log and signs with a temporary key (updates then do not install over it). `.github/workflows/firma_check.yaml` (run by hand) tells what `FIRMA_KEY` holds without printing it.
+
 ## 🔐 Panel login, verification and updates
 
 `dist/userScript.js` is part of the APK: `tools/ytmod/embed_user_script.py` turns it, with the login images in `dist/login/`, into `third_party/blink/renderer/core/dom/youtube_mod_user_script.h`, and Cobalt runs it when YouTube loads (`third_party/blink/renderer/core/dom/document.cc`). The app downloads nothing from GitHub or jsDelivr, so a change pushed here only reaches TVs with a new APK. The build regenerates the header before compiling; locally, run the script after editing either folder (`--check` tells whether the header is up to date). APKs 2.0.2 and older still load `dist/userScript.js` from jsDelivr.
@@ -36,4 +41,4 @@ Its first part is the access lock, the same as TizenTube Roku's:
 - **Expiry notice** (`api/check_days.php`) from 3 days left, and **updates** (`api/updateTV.php`): the app downloads the new APK with its own progress bar and opens the Android installer. A version marked mandatory or obsolete cannot be postponed.
 - Login network or server errors are reported to `api/log_error.php` (`LOGIN_RED`, `LOGIN_RESPUESTA`).
 
-The version sent to the panel is the installed APK's (`version_name` in `cobalt/android/BUILD.gn`, e.g. `2.0.3`, code `203`: its digits). To publish an update, raise `version_code`/`version_name` in `BUILD.gn` (keep each part below 10), build it, and register that same code in the panel.
+The version sent to the panel is the installed APK's (`version_name` in `cobalt/android/BUILD.gn`, e.g. `2.0.4`, code `204`: its digits). To publish an update, raise `version_code`/`version_name` in `BUILD.gn` (keep each part below 10), build it, and register that same code in the panel.

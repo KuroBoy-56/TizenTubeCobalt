@@ -25,7 +25,9 @@
     var ASSETS_URL = "https://cdn.jsdelivr.net/gh/KuroBoy-56/TizenTubeCobalt@main/dist/login/";
     var BG_IMAGE_URL = (EMBEDDED_ASSETS && EMBEDDED_ASSETS.bg) || ASSETS_URL + "login_bg.jpg";
     var LOGO_URL = (EMBEDDED_ASSETS && EMBEDDED_ASSETS.logo) || ASSETS_URL + "logo_login.png";
-    var BRAND_NAME = "TizenTube";
+    // Next to the YouTube logo, as YouTube writes "Premium": in its own font (YTSans on the
+    // YouTube TV page, YouTube Sans).
+    var BRAND_NAME = "Premium";
     var SECURITY_FAILED = "Conexión rechazada: Protocolo de seguridad fallido.";
     var FALLBACK_VERSION_NAME = "1.0.0";
 
@@ -406,18 +408,21 @@
             .ytm-logo {
                 position: absolute;
                 left: 50px;
-                top: 44px;
-                width: 72px;
-                height: 72px;
-                border-radius: 12px;
+                top: 52px;
+                width: 92px;
+                height: 64px;
             }
             .ytm-brand {
                 position: absolute;
-                left: 138px;
-                top: 58px;
-                color: rgba(255, 255, 255, 0.8);
-                font-size: 36px;
-                font-weight: 500;
+                left: 156px;
+                top: 52px;
+                height: 64px;
+                line-height: 64px !important;
+                color: #FFFFFF;
+                font-family: YTSans, "YouTube Sans", Roboto, Arial, sans-serif !important;
+                font-size: 46px;
+                font-weight: 700;
+                letter-spacing: -1px !important;
             }
             .ytm-headline {
                 position: absolute;

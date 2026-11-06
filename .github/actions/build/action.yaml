@@ -18,6 +18,18 @@ inputs:
   android_keystore_b64:
     description: "Keystore de release en base64 (alias androiddebugkey, clave android)."
     default: ''
+  firma_key:
+    description: "La firma del dueño: el archivo .jks de Android Studio en base64."
+    default: ''
+  firma_password:
+    description: "Contraseña del .jks (store password)."
+    default: ''
+  firma_alias:
+    description: "Alias de la llave dentro del .jks (si falta, la primera llave privada)."
+    default: ''
+  firma_key_password:
+    description: "Contraseña de la llave (si falta, la misma del .jks)."
+    default: ''
 outputs:
   timed_out:
     description: "true si ninja se detuvo en el checkpoint de tiempo (falta compilar)."
@@ -103,6 +115,10 @@ runs:
           TARGETS_JSON: ${{ inputs.targets }}
           USE_SCCACHE: 'true'
           ANDROID_KEYSTORE_B64: ${{ inputs.android_keystore_b64 }}
+          FIRMA_KEY: ${{ inputs.firma_key }}
+          FIRMA_PASSWORD: ${{ inputs.firma_password }}
+          FIRMA_ALIAS: ${{ inputs.firma_alias }}
+          FIRMA_KEY_PASSWORD: ${{ inputs.firma_key_password }}
         run: |
           cd cobalt/src
           
@@ -116,8 +132,36 @@ runs:
           
           echo "Buscando keytool..."
           KEYTOOL_CMD="keytool"
+          # La firma del dueño (FIRMA_KEY: el .jks de Android Studio en base64, con FIRMA_PASSWORD,
+          # FIRMA_ALIAS y FIRMA_KEY_PASSWORD) pasada a la llave que usa el build (alias
+          # androiddebugkey, contraseña android, ver cobalt/android/BUILD.gn). Nunca se imprime.
+          FIRMA_OK=false
+          if [ -n "$FIRMA_KEY" ]; then
+            printf '%s' "$FIRMA_KEY" | tr -d ' \r\n\t' | base64 -d > /tmp/firma.jks 2>/dev/null || true
+            FIRMA_SIZE=$(stat -c%s /tmp/firma.jks 2>/dev/null || echo 0)
+            if [ "$FIRMA_SIZE" -lt 500 ]; then
+              echo "⚠️ FIRMA_KEY tiene $FIRMA_SIZE bytes: no es un archivo .jks en base64 (parece una huella o un hash). Se firma con llave temporal."
+            else
+              FIRMA_ALIAS_USED="$FIRMA_ALIAS"
+              if [ -z "$FIRMA_ALIAS_USED" ]; then
+                FIRMA_ALIAS_USED=$($KEYTOOL_CMD -list -keystore /tmp/firma.jks -storepass "$FIRMA_PASSWORD" 2>/dev/null | grep "PrivateKeyEntry" | head -1 | cut -d, -f1)
+              fi
+              FIRMA_KP="${FIRMA_KEY_PASSWORD:-$FIRMA_PASSWORD}"
+              rm -f /tmp/debug.keystore
+              if [ -n "$FIRMA_ALIAS_USED" ] && $KEYTOOL_CMD -importkeystore -noprompt -srckeystore /tmp/firma.jks -srcstorepass "$FIRMA_PASSWORD" -srcalias "$FIRMA_ALIAS_USED" -srckeypass "$FIRMA_KP" -destkeystore /tmp/debug.keystore -deststoretype pkcs12 -deststorepass android -destkeypass android -destalias androiddebugkey > /dev/null 2>&1; then
+                FIRMA_OK=true
+                echo "✅ Firmando con la llave del dueño (FIRMA_KEY, alias $FIRMA_ALIAS_USED)."
+                $KEYTOOL_CMD -list -v -keystore /tmp/debug.keystore -storepass android 2>/dev/null | grep "SHA256:" | head -1
+              else
+                echo "⚠️ No se pudo abrir FIRMA_KEY con FIRMA_PASSWORD / FIRMA_ALIAS / FIRMA_KEY_PASSWORD: se firma con llave temporal."
+              fi
+            fi
+            rm -f /tmp/firma.jks
+          fi
           # Misma llave en cada build: si cambia, Android no instala la actualización encima.
-          if [ -n "$ANDROID_KEYSTORE_B64" ]; then
+          if [ "$FIRMA_OK" = "true" ]; then
+            true
+          elif [ -n "$ANDROID_KEYSTORE_B64" ]; then
             echo "Usando llave de release fija (secreto ANDROID_KEYSTORE_B64)..."
             echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/debug.keystore
           else

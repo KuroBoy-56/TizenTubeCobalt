@@ -41,6 +41,11 @@ jobs:
     secrets:
       datadog_api_key: ${{ secrets.DD_API_KEY }}
       android_keystore_b64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+      # La firma del dueño: el .jks de Android Studio en base64 y sus datos.
+      firma_key: ${{ secrets.FIRMA_KEY }}
+      firma_password: ${{ secrets.FIRMA_PASSWORD }}
+      firma_alias: ${{ secrets.FIRMA_ALIAS }}
+      firma_key_password: ${{ secrets.FIRMA_KEY_PASSWORD }}
 
   # Publica la APK como Release (enlace fijo: releases/latest/download/YouTubeModTV.apk) solo si
   # se pide al lanzarlo a mano (publish_release); si no, la APK queda solo como artefacto.

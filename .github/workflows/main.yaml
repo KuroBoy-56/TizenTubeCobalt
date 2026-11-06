@@ -21,6 +21,14 @@ on:
         required: false
       android_keystore_b64:
         required: false
+      firma_key:
+        required: false
+      firma_password:
+        required: false
+      firma_alias:
+        required: false
+      firma_key_password:
+        required: false
     outputs:
       timed_out:
         description: 'true si la compilación se detuvo por tiempo y debe continuar.'
@@ -181,6 +189,10 @@ jobs:
           enable_sccache: ${{ needs.initialize.outputs.enable_sccache == 'true' }}
           sccache_gcs_key: ${{ secrets.sccache_gcs_key }}
           android_keystore_b64: ${{ secrets.android_keystore_b64 }}
+          firma_key: ${{ secrets.firma_key }}
+          firma_password: ${{ secrets.firma_password }}
+          firma_alias: ${{ secrets.firma_alias }}
+          firma_key_password: ${{ secrets.firma_key_password }}
 
       - name: Release Package
         if:  (matrix.config == 'qa' || matrix.config == 'gold')
