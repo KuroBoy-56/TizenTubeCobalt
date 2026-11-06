@@ -1,0 +1,29 @@
+# Qué hay en el secreto FIRMA_KEY (solo datos públicos: tipo, alias, huella del certificado;
+# nunca el secreto ni las contraseñas). Se lanza a mano.
+name: firma_check
+on:
+  workflow_dispatch:
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Inspect FIRMA_KEY
+        env:
+          K: ${{ secrets.FIRMA_KEY }}
+          P: ${{ secrets.FIRMA_PASSWORD }}
+          A: ${{ secrets.FIRMA_ALIAS }}
+        run: |
+          set +e
+          echo "longitud: ${#K} caracteres, lineas: $(printf '%s' "$K" | wc -l)"
+          echo "FIRMA_PASSWORD definido: $([ -n "$P" ] && echo si || echo no); FIRMA_ALIAS definido: $([ -n "$A" ] && echo si || echo no)"
+          case "$K" in -----BEGIN*) echo "forma: texto PEM ($(printf '%s' "$K" | head -1))";; esac
+          if printf '%s' "$K" | tr -d ' \r\n\t' | grep -qE '^[A-Za-z0-9+/=_-]+$'; then echo "solo caracteres base64: si"; else echo "solo caracteres base64: no"; fi
+          printf '%s' "$K" | tr -d ' \r\n\t' | base64 -d > ks.bin 2>/dev/null
+          echo "base64 -d: codigo $?, $(stat -c%s ks.bin) bytes"
+          echo "tipo: $(file -b ks.bin)"
+          echo "primeros bytes: $(xxd -p -l 4 ks.bin)"
+          for pw in "" android "$P"; do
+            out=$(printf '%s\n' "$pw" | keytool -list -v -keystore ks.bin 2>&1)
+            echo "--- intento con contraseña $([ -z "$pw" ] && echo vacía || ([ "$pw" = android ] && echo android || echo FIRMA_PASSWORD)):"
+            printf '%s\n' "$out" | grep -E "Keystore type|Tipo de almac|Alias name|Entry type|Owner:|Valid from|SHA256:|keytool error|password was incorrect|Your keystore contains" | sed 's/^/   /' | head -12
+          done
