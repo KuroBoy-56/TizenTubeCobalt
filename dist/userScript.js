@@ -1389,6 +1389,13 @@ var e,t,i="function"==typeof Symbol?Symbol:{},n=i.iterator||"@@iterator",o=i.toS
         return '';
     }
 
+    // Los ajustes de TizenTube en esta app se llaman "YouTube Premium" (SponsorBlock, DeArrow...):
+    // se reconocen por su customAction o su id tizentube_* y nunca se quitan.
+    function isOurs(r) {
+        if (/^tizentube/i.test(String(r.itemId || r.categoryId || ''))) return true;
+        return JSON.stringify(r).indexOf('"customAction"') !== -1;
+    }
+
     function isPremium(r) {
         var label = text(r.title) + ' ' + text(r.formattedTitle) + ' ' + text(r.actionLabel);
         var endpoint = JSON.stringify(r.serviceEndpoint || r.navigationEndpoint || r.command || '');
@@ -1400,7 +1407,7 @@ var e,t,i="function"==typeof Symbol?Symbol:{},n=i.iterator||"@@iterator",o=i.toS
         if (!Array.isArray(list)) return list;
         return list.filter(function(item) {
             var r = rendererOf(item);
-            if (!r) return true;
+            if (!r || isOurs(r)) return true;
             if (Array.isArray(r.items)) {
                 var before = r.items.length;
                 r.items = prune(r.items);
