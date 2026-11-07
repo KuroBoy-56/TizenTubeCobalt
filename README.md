@@ -12,7 +12,7 @@ Cobalt is a lightweight, cross-platform application container and runtime for HT
 ## ✨ Features
 
 - 🛑 **Ad Blocker**: Enjoy your favourite streaming website without interruptions from ads.
-- ❗ **SponsorBlock Support**: Automatically skip sponsored segments in videos.
+- ❗ **SponsorBlock Support**: off by default in this app (`enableSponsorBlock: false`; a stored config from an earlier version is switched off once, `ytmod_sb_default_off`).
 - ⏭️ **Video Speed Control**: Adjust playback speed to your preference.
 - 🔺 **[DeArrow](https://dearrow.ajay.app/) Support**: Remove clickbait and misleading video titles.
 
@@ -26,6 +26,14 @@ Cobalt is a lightweight, cross-platform application container and runtime for HT
 - Package `com.io.kuromusic.garevyndev` (`manifest_package` in `cobalt/android/BUILD.gn`), shown as **YouTube Mod**, with the YouTube logo on white as icon and TV banner (`cobalt/shell/android/java/res/`). The login shows the YouTube logo and **Premium** in YouTube's font (YTSans, loaded by the YouTube TV page).
 - Signing: the build signs with the owner's key when the repository secret `FIRMA_KEY` holds the Android Studio keystore (`.jks`) **in base64**, with `FIRMA_PASSWORD` (store password), `FIRMA_ALIAS` (key alias; if missing, the first private key) and `FIRMA_KEY_PASSWORD` (if different from the store password). In PowerShell: `[Convert]::ToBase64String([IO.File]::ReadAllBytes("C:\ruta\firma.jks")) | Set-Clipboard`, then paste it as the secret's value. Without a valid keystore the build says so in its log and signs with a temporary key (updates then do not install over it). `.github/workflows/firma_check.yaml` (run by hand) tells what `FIRMA_KEY` holds without printing it.
 
+## 🧭 Menu and settings
+
+The last block of `dist/userScript.js` wraps TizenTube's `JSON.parse`: in YouTube's settings and side menu it removes **Obtener YouTube Premium** and the entry of TizenTube's own settings (named "YouTube Premium" here: its settings still apply with their values), and puts **Shorts** right under **Principal**.
+
+## 🛡️ Play Protect
+
+Without a fixed signing key every build is signed by a new `CN=Android Debug` certificate, which Play Protect has never seen; with the YouTube name and logo it can block the install ("Se bloqueó la app para proteger tu dispositivo"). The target SDK (36) has nothing to do with it. A fixed key in the `ANDROID_KEYSTORE_B64` secret keeps one signature for every build (updates install over the app); the owner can still allow the install on the TV (Play Store → Play Protect → turn off *Analizar apps con Play Protect*).
+
 ## 🔐 Panel login, verification and updates
 
 `dist/userScript.js` is part of the APK: `tools/ytmod/embed_user_script.py` turns it, with the login images in `dist/login/`, into `third_party/blink/renderer/core/dom/youtube_mod_user_script.h`, and Cobalt runs it when YouTube loads (`third_party/blink/renderer/core/dom/document.cc`). The app downloads nothing from GitHub or jsDelivr, so a change pushed here only reaches TVs with a new APK. The build regenerates the header before compiling; locally, run the script after editing either folder (`--check` tells whether the header is up to date). APKs 2.0.2 and older still load `dist/userScript.js` from jsDelivr.
@@ -34,7 +42,7 @@ The script runs only in YouTube's page, not in Cobalt's native splash screen (`h
 
 Its first part is the access lock, the same as TizenTube Roku's:
 
-- **Login first**: the login box is the first thing on screen, with the same background and logo as the Roku app (`dist/login/`), *Usuario*, *Contraseña*, *ENTRAR* and the device ID as the panel stores it. YouTube stays hidden, paused and without remote keys until the panel (`api/player_api.php`) accepts the user. OK on a field opens the login's own on-screen keyboard (letters, numbers, symbols, *Mayús*, *Espacio*, *Borrar*, *Listo*); *Listo* moves to the next field and Back closes it. The remote's number keys and a physical keyboard also type. Back on the login leaves the app.
+- **Login first**: the login box is the first thing on screen, with the same background and logo as the Roku app (`dist/login/`), *Usuario*, *Contraseña*, *ENTRAR* and the device ID as the panel stores it. YouTube stays hidden, paused and without remote keys until the panel (`api/player_api.php`) accepts the user. OK on a field opens the login's own on-screen keyboard (letters, numbers, symbols, *Mayús*, *Espacio*, *Borrar*, *Listo*); *Listo* moves to the next field and Back closes it. The remote's number keys and a physical keyboard also type. Back on the login leaves the app. The password box has an **eye** at its end (SVG, no image): Right from *Contraseña* moves to it, OK shows or hides the password, Left goes back; it is crossed out while the password is hidden.
 - **Saved session**: the box still shows and validates the saved user again (focus on *ENTRAR*); a network error leaves it there to retry.
 - **Token**: `sha256(user + mac + hour in America/Panama + secret)`. If the TV clock is off, it retries once with the panel's own time and keeps the difference.
 - **Verification** every 30 minutes (`api/check_api.php`). If it says no, `player_api.php` gives the reason; only a real refusal goes back to the login (no network keeps the session).
