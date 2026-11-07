@@ -30,9 +30,18 @@ Cobalt is a lightweight, cross-platform application container and runtime for HT
 
 The last block of `dist/userScript.js` wraps TizenTube's `JSON.parse`: in YouTube's settings and side menu it removes **Obtener YouTube Premium** and the entry of TizenTube's own settings (named "YouTube Premium" here: its settings still apply with their values), and puts **Shorts** right under **Principal**.
 
-## 🛡️ Play Protect
+## 🛡️ Play Protect and the fixed key (Firma fija)
 
-Without a fixed signing key every build is signed by a new `CN=Android Debug` certificate, which Play Protect has never seen; with the YouTube name and logo it can block the install ("Se bloqueó la app para proteger tu dispositivo"). The target SDK (36) has nothing to do with it. A fixed key in the `ANDROID_KEYSTORE_B64` secret keeps one signature for every build (updates install over the app); the owner can still allow the install on the TV (Play Store → Play Protect → turn off *Analizar apps con Play Protect*).
+Without a fixed signing key every build is signed by a new `CN=Android Debug` certificate, which Play Protect has never seen; with the YouTube name and logo it can block the install ("Se bloqueó la app para proteger tu dispositivo"). The target SDK (36) has nothing to do with it.
+
+The fixed key goes in the repository secret `ANDROID_KEYSTORE_B64`: a keystore in base64 whose key has alias `androiddebugkey` and password `android` (store and key), the values `cobalt/android/BUILD.gn` signs with. Created on Windows with Android Studio's `keytool`:
+
+```powershell
+& "C:\Program Files\Android\Android Studio\jbr\bin\keytool.exe" -genkeypair -keystore "$env:USERPROFILE\youtubemod.keystore" -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -storepass android -keypass android -storetype pkcs12 -dname "CN=Garevyn Dev, O=KuroMusic, C=PA"
+[Convert]::ToBase64String([IO.File]::ReadAllBytes("$env:USERPROFILE\youtubemod.keystore")) | Set-Clipboard
+```
+
+Then *Settings → Secrets and variables → Actions → New repository secret*, name `ANDROID_KEYSTORE_B64`, value pasted. Keep `youtubemod.keystore` safe: an APK signed with another key never installs over this one. `firma_check.yaml` (run by hand) says in a minute whether the secret opens; the build checks it before compiling and stops with a clear message if it does not. Every build then has the same signature, so updates install over the app; Play Protect may still warn while the key is new, and the owner can allow the install on the TV (Play Store → Play Protect → turn off *Analizar apps con Play Protect*).
 
 ## 🔐 Panel login, verification and updates
 

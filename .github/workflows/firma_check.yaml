@@ -1,5 +1,5 @@
-# Qué hay en el secreto FIRMA_KEY (solo datos públicos: tipo, alias, huella del certificado;
-# nunca el secreto ni las contraseñas). Se lanza a mano.
+# Qué hay en los secretos de firma ANDROID_KEYSTORE_B64 y FIRMA_KEY (solo datos públicos: tipo,
+# alias, dueño y huella del certificado; nunca el secreto ni las contraseñas). Se lanza a mano.
 name: firma_check
 on:
   workflow_dispatch:
@@ -7,6 +7,22 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
+      - name: Inspect ANDROID_KEYSTORE_B64
+        env:
+          KS: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
+          set +e
+          if [ -z "$KS" ]; then echo "ANDROID_KEYSTORE_B64: no está definido"; exit 0; fi
+          printf '%s' "$KS" | tr -d ' \r\n\t' | base64 -d > fixed.bin 2>/dev/null
+          echo "base64 -d: $(stat -c%s fixed.bin) bytes, tipo: $(file -b fixed.bin)"
+          if keytool -list -v -keystore fixed.bin -storepass android -alias androiddebugkey > out.txt 2>&1; then
+            echo "✅ Abre con contraseña android y alias androiddebugkey: la compilación firmará con esta llave."
+            grep -E "Owner:|Valid from|SHA256:" out.txt | head -3 | sed 's/^/   /'
+          else
+            echo "❌ No abre con contraseña android y alias androiddebugkey:"
+            grep -E "keytool error|password|Alias" out.txt | head -3 | sed 's/^/   /'
+            keytool -list -keystore fixed.bin -storepass android 2>&1 | grep -E "PrivateKeyEntry|error" | head -3 | sed 's/^/   alias: /'
+          fi
       - name: Inspect FIRMA_KEY
         env:
           K: ${{ secrets.FIRMA_KEY }}

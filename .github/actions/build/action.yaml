@@ -163,7 +163,15 @@ runs:
             true
           elif [ -n "$ANDROID_KEYSTORE_B64" ]; then
             echo "Usando llave de release fija (secreto ANDROID_KEYSTORE_B64)..."
-            echo "$ANDROID_KEYSTORE_B64" | base64 -d > /tmp/debug.keystore
+            printf '%s' "$ANDROID_KEYSTORE_B64" | tr -d ' \r\n\t' | base64 -d > /tmp/debug.keystore
+            # Se firma con alias androiddebugkey y contraseña android (cobalt/android/BUILD.gn):
+            # si la llave no abre así, se avisa ahora y no al final de 2 horas de compilación.
+            if ! $KEYTOOL_CMD -list -keystore /tmp/debug.keystore -storepass android -alias androiddebugkey > /dev/null 2>&1; then
+              echo "❌ ANDROID_KEYSTORE_B64 no abre con la contraseña android y el alias androiddebugkey. Crea la llave con esos datos (README, Firma fija)."
+              exit 1
+            fi
+            echo "✅ Llave fija:"
+            $KEYTOOL_CMD -list -v -keystore /tmp/debug.keystore -storepass android -alias androiddebugkey 2>/dev/null | grep -E "Owner:|SHA256:" | head -2
           else
             echo "⚠️ Sin secreto ANDROID_KEYSTORE_B64: firmando con llave temporal (las actualizaciones NO se instalarán encima)."
             $KEYTOOL_CMD -genkey -v -keystore /tmp/debug.keystore -alias androiddebugkey -storepass android -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" || true
