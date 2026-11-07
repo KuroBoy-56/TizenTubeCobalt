@@ -465,6 +465,12 @@ std::string StarboardBridge::GetBrandAndModel(JNIEnv* env) const {
       env, Java_StarboardBridge_getBrandAndModel(env, j_starboard_bridge_));
 }
 
+std::string StarboardBridge::GetAndroidId(JNIEnv* env) const {
+  SB_CHECK(env);
+  return ConvertJavaStringToUTF8(
+      env, Java_StarboardBridge_getAndroidId(env, j_starboard_bridge_));
+}
+
 void StarboardBridge::SetFrameRate(JNIEnv* env, float frame_rate) const {
   SB_CHECK(env);
   Java_StarboardBridge_setFrameRate(env, j_starboard_bridge_, frame_rate);

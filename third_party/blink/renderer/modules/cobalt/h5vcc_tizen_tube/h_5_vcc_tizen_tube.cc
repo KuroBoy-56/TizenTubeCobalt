@@ -74,6 +74,19 @@ WTF::String H5vccTizenTube::GetArchitecture(
 #endif // BUILDFLAG(IS_ANDROID)
 }
 
+WTF::String H5vccTizenTube::GetAndroidId(
+    ScriptState* script_state,
+    ExceptionState& exception_state) {
+#if BUILDFLAG(IS_ANDROID)
+  auto* env = base::android::AttachCurrentThread();
+  starboard::StarboardBridge* bridge = starboard::StarboardBridge::GetInstance();
+  std::string android_id = bridge->GetAndroidId(env);
+  return String::FromUTF8(android_id.c_str());
+#else
+  return "";
+#endif // BUILDFLAG(IS_ANDROID)
+}
+
 bool H5vccTizenTube::InstallAppFromURL(
     ScriptState* script_state,
     const String& url,

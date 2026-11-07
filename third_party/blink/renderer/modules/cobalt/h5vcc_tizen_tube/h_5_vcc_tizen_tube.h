@@ -56,6 +56,10 @@ class MODULES_EXPORT H5vccTizenTube final
   WTF::String GetArchitecture(ScriptState* script_state,
                              ExceptionState& exception_state);
 
+  // YouTube Mod: Settings.Secure.ANDROID_ID, the panel's device ID ("" if none).
+  WTF::String GetAndroidId(ScriptState* script_state,
+                           ExceptionState& exception_state);
+
   void SetFrameRate(float frame_rate);
   void EnterPIP();
   bool SetUserAgent(ScriptState* script_state,

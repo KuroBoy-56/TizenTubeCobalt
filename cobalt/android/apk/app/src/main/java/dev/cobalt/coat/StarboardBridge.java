@@ -841,6 +841,21 @@ public class StarboardBridge {
     return Build.SUPPORTED_ABIS[0];
   }
 
+  // YouTube Mod: the Android ID (Settings.Secure.ANDROID_ID) is the device ID the login sends to
+  // the panel. Android keeps it across uninstall/reinstall while the APK keeps the same signing
+  // key; only a factory reset changes it. Never null: "" when the system has none.
+  @CalledByNative
+  protected String getAndroidId() {
+    try {
+      String id =
+          Settings.Secure.getString(mAppContext.getContentResolver(), Settings.Secure.ANDROID_ID);
+      return id == null ? "" : id;
+    } catch (Exception e) {
+      Log.e(TAG, "Failed to read ANDROID_ID", e);
+      return "";
+    }
+  }
+
   @CalledByNative
   protected void setFrameRate(float frameRate) {
     if (Build.VERSION.SDK_INT < 30) {

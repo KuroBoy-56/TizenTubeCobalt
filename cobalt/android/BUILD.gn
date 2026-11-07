@@ -269,8 +269,8 @@ android_apk("cobalt_apk") {
   shared_libraries = [ ":libchrobalt" ]
   srcjar_deps = [ ":libchrobalt__jni_registration" ]
   include_size_info = is_official_build
-  version_code = "204"
-  version_name = "2.0.4"
+  version_code = "205"
+  version_name = "2.0.5"
   keystore_path = "../../../../.android/debug.keystore"
   keystore_name = "androiddebugkey"
   keystore_password = "android"

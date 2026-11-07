@@ -111,6 +111,7 @@ class StarboardBridge {
   std::string GetVersion(JNIEnv* env) const;
   std::string GetArchitecture(JNIEnv* env) const;
   std::string GetBrandAndModel(JNIEnv* env) const;
+  std::string GetAndroidId(JNIEnv* env) const;
   void SetFrameRate(JNIEnv* env, float frame_rate) const;
   void EnterPIP(JNIEnv* env) const;
   bool HasSystemFeature(JNIEnv* env, const char* feature_name) const;

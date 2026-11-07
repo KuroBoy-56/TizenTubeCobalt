@@ -12,6 +12,8 @@
 // - Al final del archivo: sin "Obtener YouTube Premium" ni la entrada de los ajustes de TizenTube
 //   (ajustes y menu) y Shorts debajo de Principal.
 // - SponsorBlock apagado por defecto (una vez por instalacion, antes de que TizenTube lea su config).
+// - ID del dispositivo = Android ID de la TV (no cambia al reinstalar) y, sin cuenta guardada,
+//   entrada sola si ese ID ya esta registrado en una cuenta del panel.
 (function() {
     'use strict';
 
@@ -179,8 +181,39 @@
         return sha256(unescape(encodeURIComponent(raw)));
     }
 
+    // --- ID DEL DISPOSITIVO (la "mac" del panel) ---
+    // Es el Android ID de la TV (Settings.Secure.ANDROID_ID), que da la APK con
+    // h5vcc.tizentube.GetAndroidId. Android lo conserva al desinstalar y reinstalar mientras la APK
+    // tenga la misma firma (la llave fija) y solo cambia con un reset de fabrica. Asi cada TV es un
+    // solo registro en el panel aunque se reinstale la app. Antes era un numero al azar guardado en
+    // localStorage, que se borraba al desinstalar: cada instalacion era un registro nuevo.
+    // APK sin el puente (2.0.4 y anteriores): queda la mac al azar guardada de antes.
+    function nativeAndroidId() {
+        try {
+            var tt = window.h5vcc && window.h5vcc.tizentube;
+            if (tt && typeof tt.GetAndroidId === 'function') return String(tt.GetAndroidId() || '').trim();
+        } catch (e) {}
+        return '';
+    }
+
+    // Igual que las apps Android (LibreTube), TizenTube Roku y player_api.php: sin ceros al inicio,
+    // completado con A hasta 16, en mayusculas y en pares ("1A:2B:3C:4D:5E:6F:7A:8B").
+    function normalizeMac(raw) {
+        var s = String(raw || '').replace(/[:\-\s]/g, '').replace(/^0+/, '');
+        if (!s) return '';
+        while (s.length < 16) s += 'A';
+        return s.slice(0, 16).toUpperCase().match(/.{2}/g).join(':');
+    }
+
+    var deviceMacCache = '';
     function getDeviceMac() {
-        var mac = store('ytmod_device_mac');
+        if (deviceMacCache) return deviceMacCache;
+        var mac = normalizeMac(nativeAndroidId());
+        if (mac) {
+            store('ytmod_device_mac', mac);
+            return (deviceMacCache = mac);
+        }
+        mac = store('ytmod_device_mac');
         if (!mac) {
             var hexChars = '0123456789ABCDEF';
             var parts = [];
@@ -190,15 +223,12 @@
             mac = parts.join(':');
             store('ytmod_device_mac', mac);
         }
-        return mac;
+        return (deviceMacCache = mac);
     }
 
-    // El ID como lo guarda y lo muestra el panel (player_api.php): sin ceros al inicio, 16 cifras
-    // completadas con A, en pares.
+    // El ID como lo guarda y lo muestra el panel (player_api.php).
     function deviceId() {
-        var raw = getDeviceMac().replace(/:/g, '').replace(/^0+/, '');
-        while (raw.length < 16) raw += 'A';
-        return raw.slice(0, 16).toUpperCase().match(/.{2}/g).join(':');
+        return normalizeMac(getDeviceMac());
     }
 
     // --- REPORTE DE ERRORES AL PANEL (log_error.php) ---
@@ -330,13 +360,16 @@
         var ui = r.json && r.json.user_info;
         if (!ui || typeof ui !== 'object') return { status: 'error', message: 'Respuesta de servidor inválida', detail: detail };
         var st = String(ui.status || '');
+        // El panel devuelve la cuenta (usuario y contrasena); en el login por dispositivo es
+        // como se sabe cual es.
+        var user = String(ui.username || ''), pass = String(ui.password || '');
         if (String(ui.auth) === '1' && st !== 'Expired' && st !== 'Banned' && st !== 'Disabled') {
-            return { status: 'ok', message: '', expDate: String(ui.exp_date || '') };
+            return { status: 'ok', message: '', expDate: String(ui.exp_date || ''), user: user, pass: pass };
         }
         var msg = String(ui.message || '');
         if (msg === '' || msg === 'Invalid login' || msg === 'Login failed or Expired') msg = 'Usuario o contraseña incorrectos';
         else if (msg === 'Expired') msg = 'Cuenta vencida: contacta a tu proveedor para renovar';
-        return { status: 'denied', message: msg };
+        return { status: 'denied', message: msg, user: user };
     }
 
     // --- ESTILOS ---
@@ -1012,17 +1045,7 @@
         showStatus('Verificando con el panel…', true);
         panelLogin(user, pass, function(result) {
             if (result.status === 'ok') {
-                store('ytmod_user', user);
-                store('ytmod_pass', pass);
-                store('ytmod_logged_in', '1');
-                store('ytmod_exp_date', result.expDate);
-                store('ytmod_sync_ts', Math.floor(Date.now() / 1000));
-                showStatus('Acceso concedido', true);
-                setTimeout(function() {
-                    busy = false;
-                    unlockScreen();
-                    afterLogin(user);
-                }, 700);
+                grantAccess(user, pass, result.expDate);
                 return;
             }
             busy = false;
@@ -1033,6 +1056,50 @@
                 var tipo = /^Error de red/.test(result.message) ? 'LOGIN_RED' : 'LOGIN_RESPUESTA';
                 reportError(tipo, result.message, 'Usuario escrito: ' + user + '\n' + (result.detail || ''));
             }
+        });
+    }
+
+    // Sesion aceptada por el panel: se guarda y se entra a YouTube.
+    function grantAccess(user, pass, expDate) {
+        busy = true;
+        store('ytmod_user', user);
+        store('ytmod_pass', pass);
+        store('ytmod_logged_in', '1');
+        store('ytmod_exp_date', expDate);
+        store('ytmod_sync_ts', Math.floor(Date.now() / 1000));
+        showStatus('Acceso concedido', true);
+        setTimeout(function() {
+            busy = false;
+            unlockScreen();
+            afterLogin(user);
+        }, 700);
+    }
+
+    // Instalacion nueva o reinstalada (sin cuenta guardada): si el ID de esta TV ya esta en una
+    // cuenta del panel, player_api.php la encuentra solo con la mac (usuario y contrasena vacios)
+    // y se entra sin escribir nada. Sin cuenta para este ID queda la caja vacia, sin aviso; con
+    // la cuenta vencida o bloqueada, el usuario escrito y el motivo.
+    function deviceLogin() {
+        busy = true;
+        focusIndex = 0;
+        showStatus('Buscando la cuenta de este dispositivo…', true);
+        panelLogin('', '', function(result) {
+            var list = inputs();
+            if (result.status === 'ok' && result.user && result.pass) {
+                if (list[0]) list[0].value = result.user;
+                if (list[1]) list[1].value = result.pass;
+                focusIndex = 2;
+                grantAccess(result.user, result.pass, result.expDate);
+                return;
+            }
+            busy = false;
+            if (result.status === 'denied' && result.user) {
+                if (list[0]) list[0].value = result.user;
+                focusIndex = 1;
+                showStatus(result.message, false);
+                return;
+            }
+            showStatus('', false);
         });
     }
 
@@ -1105,6 +1172,9 @@
             focusIndex = 2;
             render();
             submit();
+        } else if (!user && nativeAndroidId()) {
+            render();
+            deviceLogin();
         } else {
             focusIndex = user ? 1 : 0;
             render();

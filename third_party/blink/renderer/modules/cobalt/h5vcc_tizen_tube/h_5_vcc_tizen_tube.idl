@@ -23,6 +23,8 @@ interface H5vccTizenTube {
   DOMString GetVersion();
   [CallWith=ScriptState, RaisesException]
   DOMString GetArchitecture();
+  [CallWith=ScriptState, RaisesException]
+  DOMString GetAndroidId();
   void SetFrameRate(float frame_rate);
   void EnterPIP();
   [CallWith=ScriptState, RaisesException]
